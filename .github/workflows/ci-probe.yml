@@ -27,7 +27,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Verify GitHub source and identical application tree
-        working-directory: /home/runner/work/firecrawl/firecrawl/src
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -36,7 +35,7 @@ jobs:
           test "${GITHUB_REF}" = 'refs/heads/kubetee-release-2-11-731-1'
           git clone --filter=blob:none --no-checkout "${SOURCE_REPO}.git" src
           git -C src checkout --quiet --detach "${GITHUB_SHA}"
-          test "$(git -C src rev-parse 'HEAD:.github/workflows/ci-probe.yml')" = "$(git hash-object '.github/workflows/ci-probe.yml')"
+          test "$(git -C src rev-parse 'HEAD:.github/workflows/ci-probe.yml')" = "$(git -C src hash-object '.github/workflows/ci-probe.yml')"
           git -C src merge-base --is-ancestor "${APPLICATION_COMMIT}" "${GITHUB_SHA}"
           test -z "$(git -C src diff --name-only "${GITHUB_SHA}" "${APPLICATION_COMMIT}" -- apps)"
           base=$(git ls-remote "${UPSTREAM_REPO}" 'refs/tags/v2.11.731^{}' | awk '{print $1}')
@@ -50,17 +49,19 @@ jobs:
           python3 - <<'PY'
           import base64, gzip, json, os, urllib.request
 
-          index = json.load(open('/tmp/ghcr-index.json'))
+          auth = json.load(urllib.request.urlopen('https://ghcr.io/token?service=ghcr.io&scope=repository:kubetee-ai/firecrawl:pull'))
+          index_request = urllib.request.Request('https://ghcr.io/v2/kubetee-ai/firecrawl/manifests/' + os.environ['DIGEST'], headers={'Authorization': 'Bearer ' + auth['token'], 'Accept': 'application/vnd.oci.image.index.v1+json'})
+          index = json.load(urllib.request.urlopen(index_request))
           attestation = next(item for item in index['manifests'] if item.get('annotations', {}).get('vnd.docker.reference.type') == 'attestation-manifest')
           subject = index['manifests'][0]
           assert subject['digest'] == attestation['annotations']['vnd.docker.reference.digest']
           assert subject['platform'] == {'architecture': 'amd64', 'os': 'linux'}
           assert sum(item['platform']['architecture'] == 'amd64' for item in index['manifests']) == 1
 
-          # Anonymous token for a public package; no container/build tooling.
-          auth = json.load(urllib.request.urlopen('https://ghcr.io/token?service=ghcr.io&scope=repository:kubetee-ai/firecrawl:pull'))
-          envelope = json.load(urllib.request.urlopen('https://ghcr.io/v2/kubetee-ai/firecrawl/blobs/' + attestation['digest']))
-          request = urllib.request.Request(f"https://ghcr.io/v2/kubetee-ai/firecrawl/blobs/{envelope['layers'][0]['digest']}", headers={'Authorization': 'Bearer ' + auth['token']})
+          # Retrieve the OCI attestation manifest, then its DSSE JSON payload.
+          attestation_request = urllib.request.Request('https://ghcr.io/v2/kubetee-ai/firecrawl/manifests/' + attestation['digest'], headers={'Authorization': 'Bearer ' + auth["token"], 'Accept': 'application/vnd.oci.image.manifest.v1+json'})
+          envelope = json.load(urllib.request.urlopen(attestation_request))
+          request = urllib.request.Request(f"https://ghcr.io/v2/kubetee-ai/firecrawl/blobs/{envelope['layers'][0]['digest']}", headers={'Authorization': 'Bearer ' + auth["token"]})
           payload = json.load(urllib.request.urlopen(request))
           predicate = json.loads(base64.b64decode(payload['payload']))
           assert predicate['subject'][0]['digest']['sha256'] == subject['digest'][7:]
