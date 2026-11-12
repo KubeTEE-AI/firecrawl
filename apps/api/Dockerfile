@@ -66,7 +66,7 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 COPY . .
 
 # Build the application from a clean output directory.
-RUN sha256sum tsconfig.json src/search/execute.ts && grep -n 'tbs:' src/search/execute.ts && cat tsconfig.json && rm -rf dist && pnpm exec tsc --showConfig && rm -rf dist && pnpm run build
+RUN rm -rf dist && pnpm run build
 ARG GIT_SHA=unknown
 RUN test -s dist/src/harness.js && \
     test -s dist/src/controllers/v0/crawl-status.js && \

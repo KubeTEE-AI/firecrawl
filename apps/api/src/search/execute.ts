@@ -391,7 +391,7 @@ export async function executeSearch(
     indexCategorySearch !== null ||
     ((wantsTools || wantsSkills) && !searchTypes.length)
       ? null
-      : search({
+      : (search as (request: Parameters<typeof search>[0]) => ReturnType<typeof search>)({
           query: searchQuery,
           logger,
           requestId: context.requestId,
@@ -400,12 +400,12 @@ export async function executeSearch(
             ? Math.max(num_results_buffer, Math.min(limit * 5, 100))
             : num_results_buffer,
           tbs: options.tbs as "past_day" | "past_hour" | "past_month" | "past_week" | "past_year" | undefined,
-          filter: options.filter,
-          lang: options.lang,
-          country: options.country,
-          location: options.location,
-          safe: options.safe,
-          type: searchTypes,
+          filter: options.filter as string | undefined,
+          lang: options.lang as string,
+          country: options.country as string,
+          location: options.location as string | undefined,
+          safe: options.safe as "active" | "off" | undefined,
+          type: searchTypes as SearchResultType[],
           enterprise: options.enterprise,
           includeDomains: options.includeDomains?.length
             ? options.includeDomains
