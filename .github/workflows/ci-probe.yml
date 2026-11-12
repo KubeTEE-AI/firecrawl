@@ -126,7 +126,7 @@ jobs:
         run: |
           set -euo pipefail
           docker logout ghcr.io || true
-          docker info          if test -f src/.git/config && grep -q 'http.*extraheader' src/.git/config; then
+          if test -f src/.git/config && grep -q 'http.*extraheader' src/.git/config; then
             echo 'Checkout contains credential configuration.' >&2
             exit 1
           fi
