@@ -12,7 +12,7 @@ on:
     branches: [kubetee-release-2-11-731-1]
     paths:
       - .github/workflows/ci-probe.yml
-      - apps/api/src/search/v2/**
+      - apps/api/src/**
       - apps/api/tsconfig.json
       - apps/api/Dockerfile
 
