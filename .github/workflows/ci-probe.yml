@@ -94,7 +94,7 @@ jobs:
             --label "org.opencontainers.image.version=${RELEASE_VERSION}" \
             --build-arg install_env=production --build-arg compile_env=production \
             --build-arg GIT_SHA="${GITHUB_SHA}" \
-            --tag "${GHCR_IMAGE}:${RELEASE_VERSION}" -f apps/api/Dockerfile . | tee build.log
+            --tag "${GHCR_IMAGE}:${RELEASE_VERSION}" -f apps/api/Dockerfile apps/api | tee build.log
           digest=$(sed -n 's/.* name: '${GHCR_IMAGE}'.* digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' build.log | tail -1)
           [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
           docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{json .Provenance}}' | \
