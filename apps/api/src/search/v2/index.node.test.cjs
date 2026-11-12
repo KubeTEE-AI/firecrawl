@@ -36,11 +36,14 @@ function loadRouter(providers) {
     // unrelated upstream runtime modules; no search behavior is mocked.
     return Object.hasOwn(dependencies, request) ? dependencies[request] : realLoad.call(this, request, ...rest);
   };
-  for (const path of ["./index.js", "./supported.js", "./attested-search-config.js"]) {
+  for (const path of ["./index.ts", "./supported.ts", "./attested-search-config.ts"]) {
     delete require.cache[require.resolve(path)];
   }
-  ({ search } = require("./index.js"));
-  Module._load = realLoad;
+  ({ search } = require("./index.ts"));
+  Module._load = function (request, ...rest) {
+    if (request === "node:fs") return realFS;
+    return Object.hasOwn(dependencies, request) ? dependencies[request] : realLoad.call(this, request, ...rest);
+  };
 }
 const logger = { info() {}, error() {} };
 const originalFetch = globalThis.fetch;
@@ -107,23 +110,28 @@ test("missing configured guest keys fail closed without outbound fetch", async (
 });
 
 test("final SearXNG source requests .json suffix and request timeout", async () => {
-  const { searxng_search } = require("./searxng.js");
+  const { searxng_search } = require("./searxng.ts");
   const axios = require("axios");
   const original = axios.get;
   let params;
-  axios.get = async (url, options) => {
-    assert.ok(options.timeout > 0);
-    assert.equal(url, "http://searxng/search");
-    params = options.params;
-    return { data: { results: [{ url: "https://json.example", title: "JSON", content: "Result" }] } };
-  };
-  delete config.SEARXNG_ENGINES;
-  delete config.SEARXNG_CATEGORIES;
-  const response = await searxng_search("q", { num_results: 5 });
-  assert.equal(urls(response)[0], "https://json.example");
-  assert.equal(Object.hasOwn(params, "engines"), false);
-  assert.equal(Object.hasOwn(params, "categories"), false);
-  axios.get = original;
+  try {
+    axios.get = async (url, options) => {
+      assert.ok(options.timeout > 0);
+      assert.equal(url, "http://searxng/search/search");
+      params = options.params;
+      return { data: { results: [{ url: "https://json.example", title: "JSON", content: "Result" }] } };
+    };
+    delete config.SEARXNG_ENGINES;
+    delete config.SEARXNG_CATEGORIES;
+    const response = await searxng_search("q", { num_results: 5 });
+    assert.equal(urls(response)[0], "https://json.example");
+    // production searxng.ts emits these keys with empty-string values.
+    assert.equal(params.engines, "");
+    assert.equal(params.categories, "");
+    assert.equal(params.format, "json");
+  } finally {
+    axios.get = original;
+  }
   const actualConfig = realFS.readFileSync(__filename, "utf8");
   assert.ok(actualConfig.includes("/secrets/providers"));
 });

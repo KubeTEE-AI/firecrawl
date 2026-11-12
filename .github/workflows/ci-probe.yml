@@ -12,8 +12,10 @@ on:
     branches: [kubetee-release-2-11-731-1]
     paths:
       - .github/workflows/ci-probe.yml
-      - .github/workflows/kubetee-release-2-11-731-1
-      - .github/workflows/kubetee-release-v2-11-731-kubetee-1
+      - apps/api/src/search/v2/**
+      - apps/api/tsconfig.provider-test.json
+      - apps/api/provider-test-stubs.cjs
+      - apps/api/Dockerfile
 
 # At most one builder named kubetee-provider; jobs are sequential.
 concurrency:
@@ -78,13 +80,15 @@ jobs:
           root=${RUNNER_TEMP}/provider-root
           mkdir -p "${root}"
           cp -R apps/api/. "${root}/"
+          cp apps/api/provider-test-stubs.cjs "${root}/provider-test-stubs.cjs"
+          test -f "${root}/tsconfig.json"
           rm -rf "${root}/src/search/v2/index.node.test.ts"
           rm -f "${root}/src/search/v2/.router-test.cjs" "${root}/src/search/v2/.test-bootstrap.cjs" "${root}/src/search/v2/.test.cjs"
           rm -rf "${root}/node_modules"
           git diff --exit-code "${BASE_COMMIT}" -- apps/api/package.json apps/api/pnpm-lock.yaml apps/api/pnpm-workspace.yaml apps/api/patches
           test -f apps/api/src/search/v2/supported.node.test.ts
           test -f apps/api/src/search/v2/index.node.test.cjs
-          test -f apps/api/tsconfig.provider-test.json
+          test -f apps/api/provider-test-stubs.cjs
           mkdir -p "${root}/store"
           common=(--rm --platform linux/amd64 -w /work --user 0 --env CI=true
             --mount "type=bind,source=${root},target=/src,readonly"
@@ -95,10 +99,11 @@ jobs:
           # weaken the registry security floor; CI remains on minimumReleaseAge.
           docker run "${common[@]}" \
             docker.io/library/node:22.23.5-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee \
-            sh -eu -c 'corepack enable && corepack prepare pnpm@11.4.0 --activate && cp -R /src/. /work/ && cd /work && pnpm install --frozen-lockfile --ignore-scripts --store-dir /store && cmp pnpm-lock.yaml /src/pnpm-lock.yaml && ./node_modules/.bin/tsc -p tsconfig.provider-test.json && node --test dist-test/search/v2/*.node.test.*'
+            sh -eu -c 'corepack enable && corepack prepare pnpm@11.4.0 --activate && cp -R /src/. /work/ && export NODE_OPTIONS="--require=/work/provider-test-stubs.cjs" && cd /work && pnpm install --frozen-lockfile --ignore-scripts --store-dir /store && cmp pnpm-lock.yaml /src/pnpm-lock.yaml && node --import tsx --test src/search/v2/supported.node.test.ts src/search/v2/index.node.test.cjs'
           # Type prerequisites for this isolated test install outside pnpm. The
           # upstream lockfile stays unchanged and native hooks are not invoked;
-          # the production Docker build performs its actual native build.
+          # the production Docker build performs its actual full TypeScript build.
+          #tsx runs the real source in isolation to avoid duplicating that build's graph.
 
       - name: Create native pinned BuildKit and pre-cache the Dockerfile frontend
         run: |

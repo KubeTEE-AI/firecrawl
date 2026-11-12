@@ -53,6 +53,8 @@ export class SupportedSearchError extends Error {
 }
 
 const healthMaxFailures = 5;
+const requestOptions = ["num_results", "type", "safe", "lang", "country", "includeDomains", "excludeDomains"] as const;
+const inflight = new WeakMap<ProviderHealth, Map<string, Promise<SearchV2Response>>>();
 
 // Credentials are loaded only through credentialAtPath after CDH attestation.
 
@@ -122,8 +124,11 @@ export async function supported_search(
   state: ProviderHealth = {},
   now: () => number = Date.now,
 ): Promise<SearchV2Response> {
-  if (options.categories.length > 0) {    throw new Error("Supported search providers accept web search only.");
+  if (options.categories.length > 0) {
+    throw new Error("Supported search providers accept web search only.");
   }
+  const sanitizedOptions = Object.keys(options).filter(key => !requestOptions.includes(key as typeof requestOptions[number]));
+  if (sanitizedOptions.length > 0) throw new Error(`Unsupported search option: ${sanitizedOptions.join(",")}`);
   if (!credentials) throw new Error("No supported search provider is initialized from attested storage.");
   const names = Object.keys(credentials);
   if (names.length === 0) {
@@ -134,6 +139,28 @@ export async function supported_search(
       throw new SupportedSearchError("configuration", "Unknown configured supported search provider.");
     }
   });
+  const requestKey = JSON.stringify([query, requestOptions.map(key => [key, options[key]])]);
+  let pending = inflight.get(state);
+  if (!pending) { pending = new Map(); inflight.set(state, pending); }
+  const previous = pending.get(requestKey);
+  if (previous) return previous;
+  const result = supported_search_uncached(query, options, credentials, state, now);
+  pending.set(requestKey, result);
+  try { return await result; }
+  // Rejections can be observed before the microtask checkpoint and overall
+  // timeout. Finally also prevents rejected searches poisoning future traffic.
+  finally { pending.delete(requestKey); }
+}
+
+async function supported_search_uncached(
+  query: string, options: SupportedOptions,
+  credentials: Partial<SupportedCredentials>, state: ProviderHealth,
+  now: () => number,
+): Promise<SearchV2Response> {
+  const names = Object.keys(credentials) as SupportedProvider[];
+  if (options.categories.length > 0) {
+    throw new Error("Supported search providers accept web search only.");
+  }
   const errors: string[] = [];
   const limit = Math.min(Math.max(options.num_results, 1), 20);
 

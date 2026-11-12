@@ -1,6 +1,6 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { credentialAtPath, supported_search } from "./supported.ts";
+import { credentialAtPath, supported_search } from "./supported.js";
 
 test("provider credentials come only from attested in-guest files", () => {
   const files: Record<string, string> = {
