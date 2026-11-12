@@ -136,13 +136,7 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f "ref=refs/tags/${RELEASE_VERSION}" -f "sha=${GITHUB_SHA}"
           gh release create "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" \
             --title "Firecrawl ${RELEASE_VERSION} — attested provider search" \
-            --generate-notes --notes-file - <<'RELEASE'
-Native GitHub Actions build, exact source and upstream v2.11.731.
-Immutable GHCR image digest and source provenance in the run summary.
-No provider credentials enter the image or runtime environment. Provider
-keys are released by Trustee KBS through CDH at /secrets/providers only
-inside an attested Firecrawl Kata TDX guest.
-RELEASE
+            --generate-notes --notes 'Native GitHub Actions build, exact source and upstream v2.11.731. Immutable GHCR image digest and source provenance in the run summary. No provider credentials enter the image or runtime environment. Provider keys are released by Trustee KBS through CDH at /secrets/providers only inside an attested Firecrawl Kata TDX guest.'
 
       - name: Clean ephemeral builder and credentials
         if: always()
