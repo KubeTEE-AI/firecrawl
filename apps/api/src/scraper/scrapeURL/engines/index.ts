@@ -971,40 +971,31 @@ export async function buildFallbackList(meta: Meta): Promise<
     }
   }
 
-  const currentEngines =
-    meta.internalOptions.forceEngine !== undefined
-      ? Array.isArray(meta.internalOptions.forceEngine)
-        ? meta.internalOptions.forceEngine
-        : [meta.internalOptions.forceEngine]
-      : _engines;
+  // Without fire-engine (or its test mocks), no engine fetches a page through
+  // a stealth proxy: only index lookups and the file parsers declare
+  // stealthProxy support. Counting the flag would leave only the file parsers
+  // above the threshold and in the stealth-only narrowing below, so an HTML
+  // page that escalated to stealthProxy would fail on every engine.
+  const scoresStealthProxy = useFireEngine || meta.mock !== null;
+  const isScoredFlag = (flag: FeatureFlag) =>
+    scoresStealthProxy || flag !== "stealthProxy";
 
-  // Index lookups and the file parsers declare stealthProxy support but never
-  // fetch an HTML page through a stealth proxy. Without an engine that does
-  // (e.g. self-hosted without fire-engine), stealthProxy cannot be honored, so
-  // it must not steer selection: otherwise only the file parsers clear the
-  // priority threshold and an HTML page fails on every engine.
-  const scoredFlags = new Set(meta.featureFlags);
-  if (
-    !currentEngines.some(
-      engine =>
-        engineOptions[engine].features.stealthProxy &&
-        !engine.startsWith("index") &&
-        !["pdf", "document", "image"].includes(engine),
-    )
-  ) {
-    scoredFlags.delete("stealthProxy");
-  }
-
-  const prioritySum = [...scoredFlags].reduce(
-    (a, x) => a + featureFlagOptions[x].priority,
-    0,
-  );
+  const prioritySum = [...meta.featureFlags]
+    .filter(isScoredFlag)
+    .reduce((a, x) => a + featureFlagOptions[x].priority, 0);
   const priorityThreshold = Math.floor(prioritySum / 2);
   let selectedEngines: {
     engine: Engine;
     supportScore: number;
     unsupportedFeatures: Set<FeatureFlag>;
   }[] = [];
+
+  const currentEngines =
+    meta.internalOptions.forceEngine !== undefined
+      ? Array.isArray(meta.internalOptions.forceEngine)
+        ? meta.internalOptions.forceEngine
+        : [meta.internalOptions.forceEngine]
+      : _engines;
 
   for (const engine of currentEngines) {
     // Zero data retention scrapes, forced engines included, never use the
@@ -1025,13 +1016,14 @@ export async function buildFallbackList(meta: Meta): Promise<
 
     const supportedFlags = new Set([
       ...Object.entries(engineOptions[engine].features)
-        .filter(([k, v]) => scoredFlags.has(k as FeatureFlag) && v === true)
+        .filter(
+          ([k, v]) => meta.featureFlags.has(k as FeatureFlag) && v === true,
+        )
         .map(([k, _]) => k),
     ]);
-    const supportScore = [...supportedFlags].reduce(
-      (a, x) => a + featureFlagOptions[x].priority,
-      0,
-    );
+    const supportScore = [...supportedFlags]
+      .filter(isScoredFlag)
+      .reduce((a, x) => a + featureFlagOptions[x].priority, 0);
 
     const unsupportedFeatures = new Set([...meta.featureFlags]);
     for (const flag of meta.featureFlags) {
@@ -1052,7 +1044,7 @@ export async function buildFallbackList(meta: Meta): Promise<
   // silently ignoring the user's request and never attempting stealth.
   // The guard keeps the original list if no stealth-capable engine qualified
   // (e.g. self-hosted without fire-engine) so scrapes don't break entirely.
-  if (meta.featureFlags.has("stealthProxy")) {
+  if (scoresStealthProxy && meta.featureFlags.has("stealthProxy")) {
     const stealthCapable = selectedEngines.filter(
       x => !x.unsupportedFeatures.has("stealthProxy"),
     );
