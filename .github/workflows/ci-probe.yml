@@ -191,9 +191,10 @@ jobs:
           if [[ -z "${{ inputs.published_digest }}" ]]; then
             gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f "ref=refs/tags/${RELEASE_VERSION}" -f "sha=${source_commit}"
           else
-            tag_object=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags" -f "tag=${RELEASE_VERSION}" -f "object=${source_commit}" -f "type=commit" -f "message=KubeTEE ${RELEASE_VERSION}, GHCR index ${{ steps.evidence.outputs.digest }}." --jq .sha)
-            gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f "ref=refs/tags/${RELEASE_VERSION}" -f "sha=${tag_object}"
-            test "$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}" --jq .object.sha)" = "${source_commit}"
+            # GITHUB_TOKEN may write lightweight refs but not git/tag objects.
+            # A lightweight tag preserves this immutable source without signing.
+            gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f "ref=refs/tags/${RELEASE_VERSION}" -f "sha=${source_commit}"
+            test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_VERSION}" --jq .object.sha)" = "${source_commit}"
           fi
           gh release create "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --target "${source_commit}" --verify-tag \
             --title "Firecrawl ${RELEASE_VERSION} — attested provider search" \
