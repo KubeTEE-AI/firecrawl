@@ -46,7 +46,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 <<'PY'
+          python3 - <<'PY'
           import base64, gzip, json, os, urllib.request
 
           index = json.load(open('/tmp/ghcr-index.json'))
@@ -77,7 +77,7 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'w') as output:
               output.write(f"## Native Firecrawl package verified\n\n- Image: `{os.environ['IMAGE']}:{os.environ['RELEASE_VERSION']}@{os.environ['DIGEST']}`\n- Source: {os.environ['SOURCE_REPO']}/commit/{os.environ['APPLICATION_COMMIT']}\n- Build: {os.environ['BUILD_RUN']}\n- linux/amd64; exact digest, SLSA source and production inputs verified via GHCR HTTPS. No Docker.\n- Functional tests: KubeTEE staging only.\n")
           print(json.dumps({'image': os.environ['IMAGE'] + '@' + os.environ['DIGEST'], 'source': os.environ['APPLICATION_COMMIT'], 'platform': subject['platform']}, indent=2))
-          PY
+PY
 
       - name: Publish immutable source tag and release evidence
         env:
