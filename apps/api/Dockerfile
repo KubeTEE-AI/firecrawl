@@ -41,9 +41,10 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     PATH=/usr/local/cargo/bin:$PATH
 
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path \
-    && ln -s ../rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo /usr/local/cargo/bin/cargo \
-    && ln -s ../rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc /usr/local/cargo/bin/rustc \
+RUN if ! cargo --version; then \
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path; \
+    fi \
+    && command -v cargo && command -v rustc \
     && rustc --version && cargo --version \
     && test "$(uname -m)" = x86_64 \
     && test "$(rustup target list --installed)" = x86_64-unknown-linux-gnu \
