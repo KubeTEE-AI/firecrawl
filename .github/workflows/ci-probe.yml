@@ -75,7 +75,12 @@ jobs:
           docker info
 
       # No Docker test runner. Validate search only on the staging cluster.
-      # GitHub's native builder handles AMD64 packaging. Tests run on staging.
+      - name: Create native pinned BuildKit
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker-container
+          driver-opts: image=moby/buildkit:buildx-stable-1@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+          buildkitd-flags: --allow-insecure-entitlement security.insecure
 
       - name: Publish immutable image with native provenance
         run: |
@@ -121,8 +126,7 @@ jobs:
         run: |
           set -euo pipefail
           docker logout ghcr.io || true
-          docker buildx rm kubetee-provider || true
-          if test -f src/.git/config && grep -q 'http.*extraheader' src/.git/config; then
+          docker info          if test -f src/.git/config && grep -q 'http.*extraheader' src/.git/config; then
             echo 'Checkout contains credential configuration.' >&2
             exit 1
           fi
