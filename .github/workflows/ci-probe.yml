@@ -1,0 +1,157 @@
+name: KubeTEE Firecrawl release
+run-name: KubeTEE Firecrawl ${{ inputs.version || github.ref_name }} — native GitHub build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Immutable KubeTEE release version
+        required: true
+        type: string
+  push:
+    branches: [kubetee-release-2-11-731-1]
+    paths:
+      - .github/workflows/ci-probe.yml
+      - .github/workflows/kubetee-release-2-11-731-1
+
+# At most one builder named kubetee-provider; jobs are sequential.
+concurrency:
+  group: firecrawl-kubetee-ghcr-release
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  BASE_TAG: v2.11.731
+  RELEASE_VERSION: v2.11.731-kubetee.1
+  GHCR_IMAGE: ghcr.io/kubetee-ai/firecrawl
+  SOURCE_REPO: https://github.com/KubeTEE-AI/firecrawl.git
+  UPSTREAM_REPO: https://github.com/firecrawl/firecrawl.git
+  BUILDX_VERSION: 0.38.2
+  BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+      attestations: write
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Verify exact approved source and immutable version
+        id: build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "${GITHUB_REPOSITORY}" = "KubeTEE-AI/firecrawl"
+          test "${GITHUB_REF}" = "refs/heads/kubetee-provider-patch" || test "${GITHUB_REF}" = "refs/heads/kubetee-release-2-11-731-1"
+          test "$(git ls-remote "${SOURCE_REPO}" "refs/tags/${RELEASE_VERSION}^{}")" = ""
+          if [[ "${GITHUB_EVENT_NAME}" = workflow_dispatch ]]; then
+            test "${{ inputs.version }}" = "${RELEASE_VERSION}"
+          fi
+          test "${BASE_TAG}" = v2.11.731
+          git clone --no-checkout --filter=blob:none "${SOURCE_REPO}" src
+          cd src
+          base_commit=$(git ls-remote "${UPSTREAM_REPO}" "refs/tags/${BASE_TAG}^{}" | awk '{print $1}')
+          test "${#base_commit}" = 40
+          git checkout --quiet --detach "${GITHUB_SHA}"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          test "$(git rev-parse "HEAD:${GITHUB_WORKFLOW_REF#*KubeTEE-AI/firecrawl/}")" = "$(git hash-object "../${GITHUB_WORKFLOW_REF#*KubeTEE-AI/firecrawl@}")"
+          git merge-base --is-ancestor "${base_commit}" HEAD
+          echo "Base: $(git log -1 --format='%H %s' "${base_commit}")"
+          echo "Source: $(git log -1 --format='%H %s' HEAD)"
+          docker info
+
+      - name: Test exact-source provider modules in isolated Node 22
+        run: |
+          set -euo pipefail
+          cd src
+          for test in apps/api/src/search/v2/*.node.test.ts apps/api/src/config.node.test.ts; do
+            test -f "${test}"
+            lib="/private/tmp/provider-$(basename "${test}" .ts)-lib"
+            mkdir -p "${lib}"
+            args=(--rm --platform linux/amd64 -w /work
+              --mount "type=bind,source=${PWD}/${test},target=/work/${test##*/},readonly"
+              --mount "type=bind,source=${PWD}/apps/api/src/config.ts,target=/work/config.ts,readonly"
+              --mount "type=bind,source=${PWD}/apps/api/src/env.ts,target=/work/env.ts,readonly"
+              --mount "type=bind,source=${PWD}/apps/api/src/search/v2/supported.ts,target=/work/supported.ts,readonly"
+              --mount "type=bind,source=${PWD}/apps/api/src/search/v2/index.ts,target=/work/index.ts,readonly")
+            docker run "${args[@]}" --mount "type=bind,source=${lib},target=/work/node_modules" \
+              docker.io/library/node:22-alpine sh -eu -c 'npm install --prefix /work --no-save pnpm@10.15.1 dotenv@17.2.2 zod@4.1.8 typescript@5.9.2 tsx@4.20.6'
+            docker run "${args[@]}" --mount "type=bind,source=${lib},target=/work/node_modules,readonly" \
+              docker.io/library/node:22-alpine node --import tsx --test "/work/${test##*/}"
+          done
+
+      - name: Create native pinned BuildKit and pre-cache the Dockerfile frontend
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/cli-plugins"
+          curl -fL --retry 5 --retry-all-errors \
+            "https://github.com/docker/buildx/releases/download/v${BUILDX_VERSION}/buildx-v${BUILDX_VERSION}.linux-amd64" \
+            -o "${RUNNER_TEMP}/cli-plugins/docker-buildx"
+          chmod 0755 "${RUNNER_TEMP}/cli-plugins/docker-buildx"
+          echo "DOCKER_CONFIG=${RUNNER_TEMP}" >> "${GITHUB_ENV}"
+          docker buildx create --name kubetee-provider --driver docker-container \
+            --driver-opt "image=${BUILDKIT_IMAGE}" --buildkitd-flags="--allow-insecure-entitlement security.insecure" --use
+          docker pull --platform linux/amd64 docker/dockerfile:1
+          docker buildx inspect kubetee-provider --bootstrap
+
+      - name: Publish immutable image with native provenance
+        run: |
+          set -euo pipefail
+          cd src
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker buildx build --progress=plain --builder kubetee-provider \
+            --platform linux/amd64 --provenance=mode=max --no-cache --pull --push \
+            --label "org.opencontainers.image.source=${SOURCE_REPO}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${RELEASE_VERSION}" \
+            --build-arg install_env=production --build-arg compile_env=production \
+            --tag "${GHCR_IMAGE}:${RELEASE_VERSION}" -f apps/api/Dockerfile . | tee build.log
+          digest=$(sed -n 's/.* name: '${GHCR_IMAGE}'.* digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' build.log | tail -1)
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{json .Provenance}}' | \
+            jq -e '."linux/amd64".SLSA.buildDefinition.resolvedDependencies[] | select(.uri == "git+https://github.com/KubeTEE-AI/firecrawl@'"${GITHUB_REF}"'" and .digest.gitCommit == "'"${GITHUB_SHA}"'")' >/dev/null
+          {
+            echo "digest=${digest}"
+            echo "image=${GHCR_IMAGE}:${RELEASE_VERSION}@${digest}"
+          } >> "${GITHUB_OUTPUT}"
+          {
+            echo '## Firecrawl release'
+            echo "- Source: ${SOURCE_REPO}/commit/${GITHUB_SHA}"
+            echo "- Image: ${GHCR_IMAGE}:${RELEASE_VERSION}@${digest}"
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Publish immutable source tag and GHCR digest evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{json .Manifest}}' | jq -r .digest)" = '${{ steps.build.outputs.digest }}'
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f "ref=refs/tags/${RELEASE_VERSION}" -f "sha=${GITHUB_SHA}"
+          gh release create "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" \
+            --title "Firecrawl ${RELEASE_VERSION} — attested provider search" \
+            --generate-notes --notes-file - <<'RELEASE'
+Native GitHub Actions build, exact source and upstream v2.11.731.
+Immutable GHCR image digest and source provenance in the run summary.
+No provider credentials enter the image or runtime environment. Provider
+keys are released by Trustee KBS through CDH at /secrets/providers only
+inside an attested Firecrawl Kata TDX guest.
+RELEASE
+
+      - name: Clean ephemeral builder and credentials
+        if: always()
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io || true
+          docker buildx rm kubetee-provider || true
+          if test -f src/.git/config && grep -q 'http.*extraheader' src/.git/config; then
+            echo 'Checkout contains credential configuration.' >&2
+            exit 1
+          fi
+
