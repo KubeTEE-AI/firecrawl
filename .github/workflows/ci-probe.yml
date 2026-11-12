@@ -63,7 +63,8 @@ jobs:
           envelope = json.load(urllib.request.urlopen(attestation_request))
           request = urllib.request.Request(f"https://ghcr.io/v2/kubetee-ai/firecrawl/blobs/{envelope['layers'][0]['digest']}", headers={'Authorization': 'Bearer ' + auth["token"]})
           payload = json.load(urllib.request.urlopen(request))
-          predicate = json.loads(base64.b64decode(payload['payload']))
+          # GHCR serves the raw in-toto predicate from this OCI blob layer.
+          predicate = json.loads(base64.b64decode(payload['payload'])) if 'payload' in payload else payload
           assert predicate['subject'][0]['digest']['sha256'] == subject['digest'][7:]
           definition = predicate['predicate']['buildDefinition']
           args = definition['externalParameters']['root']['request']['args']
