@@ -205,9 +205,7 @@ export async function executeSearch(
     billing,
   } = context;
 
-  const tbsMap: Record<string, "past_day" | "past_hour" | "past_month" | "past_week" | "past_year"> = {
-    hour: "past_hour", day: "past_day", week: "past_week", month: "past_month", year: "past_year",
-  };
+  // Upstream request validation accepts the existing provider time-window enum.
   const num_results_buffer = Math.floor(limit * 2);
   const usOnly = isUsOnly(flags);
   const usOnlyWarnings: string[] = [];
@@ -401,7 +399,7 @@ export async function executeSearch(
           num_results: operatorPlan.relaxed
             ? Math.max(num_results_buffer, Math.min(limit * 5, 100))
             : num_results_buffer,
-          tbs: tbsMap?.[options.tbs ?? ""],
+          tbs: options.tbs as "past_day" | "past_hour" | "past_month" | "past_week" | "past_year" | undefined,
           filter: options.filter,
           lang: options.lang,
           country: options.country,
