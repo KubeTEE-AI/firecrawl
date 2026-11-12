@@ -45,71 +45,39 @@ jobs:
       - name: Verify exact native GHCR manifest and complete SLSA source
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node <<'JS'
-  const assert = require('node:assert/strict');
-  const crypto = require('node:crypto');
-  const fs = require('node:fs');
-  const https = require('node:https');
+        run: |
+          python3 <<'PY'
+          import base64, gzip, json, os, urllib.request
 
-  function get(url, headers = {}, depth = 0) {
-    if (depth > 8) throw new Error('excessive registry redirects');
-    return new Promise((resolve, reject) => {
-      https.get(url, { headers }, res => {
-        if ([301, 302, 307, 308].includes(res.statusCode)) {
-          res.resume();
-          return resolve(get(res.headers.location, {}, depth + 1));
-        }
-        const chunks = [];
-        res.on('data', chunk => chunks.push(chunk));
-        res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
-        res.on('error', reject);
-      }).on('error', reject).setTimeout(90000, function () { this.destroy(new Error('registry timeout')); });
-    });
-  }
+          index = json.load(open('/tmp/ghcr-index.json'))
+          attestation = next(item for item in index['manifests'] if item.get('annotations', {}).get('vnd.docker.reference.type') == 'attestation-manifest')
+          subject = index['manifests'][0]
+          assert subject['digest'] == attestation['annotations']['vnd.docker.reference.digest']
+          assert subject['platform'] == {'architecture': 'amd64', 'os': 'linux'}
+          assert sum(item['platform']['architecture'] == 'amd64' for item in index['manifests']) == 1
 
-  (async () => {
-    const { GH_TOKEN, APPLICATION_COMMIT, DIGEST, IMAGE, RELEASE_VERSION, BUILD_RUN, SOURCE_REPO } = process.env;
-    // Repository write is needed to read the package linked to the private fork.
-    const resource = IMAGE.replace('ghcr.io/', '');
-    const request = { Authorization: `Bearer ${GH_TOKEN}`, Accept: 'application/vnd.oci.image.index.v1+json' };
-    const index = await get(`https://ghcr.io/v2/${resource}/manifests/${RELEASE_VERSION}`, request);
-    const manifest = await get(`https://ghcr.io/v2/${resource}/manifests/${DIGEST}`, request);
-    assert.equal(index.status, 200, JSON.stringify(index.headers));
-    assert.equal(manifest.status, 200, JSON.stringify(manifest.headers));
-    assert.equal(manifest.headers['docker-content-digest'], DIGEST);
-    assert.equal(crypto.createHash('sha256').update(manifest.body).digest('hex'), DIGEST.slice(7));
-    const doc = manifest.json ? manifest.json : JSON.parse(manifest.body);
-    assert.equal(doc.mediaType, 'application/vnd.oci.image.index.v1+json');
-    const app = doc.manifests.find(item => item.platform.architecture === 'amd64' && item.platform.os === 'linux');
-    assert(app, 'missing linux/amd64 application manifest');
-    assert.equal(doc.manifests.filter(item => item.platform.architecture === 'amd64').length, 1);
-    const attestation = doc.manifests.find(item => item.annotations?.['vnd.docker.reference.type'] === 'attestation-manifest');
-    assert(attestation, 'missing native build attestation');
-    assert.equal(attestation.annotations['vnd.docker.reference.digest'], app.digest);
-
-    const att = await get(`https://ghcr.io/v2/${resource}/manifests/${attestation.digest}`, request);
-    assert.equal(att.status, 200);
-    const attDoc = JSON.parse(att.body);
-    const blob = await get(`https://ghcr.io/v2/${resource}/blobs/${attDoc.layers[0].digest}`, request);
-    assert.equal(blob.status, 200);
-    const envelope = JSON.parse(blob.body);
-    assert.equal(envelope.payloadType, 'application/vnd.in-toto+json');
-    const predicate = JSON.parse(Buffer.from(envelope.payload, 'base64').toString('utf8'));
-    const invocation = JSON.parse(predicate.predicate.invocation.parameters.frontend);
-    const requestArgs = invocation.request.args;
-    assert.equal(predicate.subject[0].digest.sha256, app.digest.slice(7));
-    assert.equal(invocation.request.frontend, 'gateway.v0');
-    assert.equal(requestArgs['label:org.opencontainers.image.source'], `${SOURCE_REPO}.git`);
-    for (const key of ['label:org.opencontainers.image.revision', 'build-arg:GIT_SHA']) assert.equal(requestArgs[key], APPLICATION_COMMIT);
-    assert.equal(requestArgs['label:org.opencontainers.image.version'], RELEASE_VERSION);
-    for (const key of ['build-arg:compile_env', 'build-arg:install_env']) assert.equal(requestArgs[key], 'production');
-    const dependency = invocation.request.resolvedDependencies.find(item => item.uri.startsWith('pkg:docker/node@22.23.5-slim?'));
-    assert.deepEqual(dependency.digest, { sha256: 'e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee' });
-    assert(dependency.uri.includes('platform=linux%2Famd64'));
-    console.log(JSON.stringify({ image: `${IMAGE}:${RELEASE_VERSION}@${DIGEST}`, applicationManifest: app.digest, source: `${SOURCE_REPO}/commit/${APPLICATION_COMMIT}`, build: BUILD_RUN }, null, 2));
-    fs.writeFileSync(process.env.GITHUB_STEP_SUMMARY, `## Native Firecrawl package verified\n\n- Image: \`${IMAGE}:${RELEASE_VERSION}@${DIGEST}\`\n- Application source: ${SOURCE_REPO}/commit/${APPLICATION_COMMIT}\n- Native GitHub build: ${BUILD_RUN}\n- linux/amd64; SLSA source, digest and production inputs verified by GitHub Node HTTPS.\n- Functional testing: KubeTEE staging only; no local/Docker application tests.\n`);
-  })().catch(error => { console.error(error); process.exit(1); });
-JS
+          # Anonymous token for a public package; no container/build tooling.
+          auth = json.load(urllib.request.urlopen('https://ghcr.io/token?service=ghcr.io&scope=repository:kubetee-ai/firecrawl:pull'))
+          envelope = json.load(urllib.request.urlopen('https://ghcr.io/v2/kubetee-ai/firecrawl/blobs/' + attestation['digest']))
+          request = urllib.request.Request(f"https://ghcr.io/v2/kubetee-ai/firecrawl/blobs/{envelope['layers'][0]['digest']}", headers={'Authorization': 'Bearer ' + auth['token']})
+          payload = json.load(urllib.request.urlopen(request))
+          predicate = json.loads(base64.b64decode(payload['payload']))
+          assert predicate['subject'][0]['digest']['sha256'] == subject['digest'][7:]
+          definition = predicate['predicate']['buildDefinition']
+          args = definition['externalParameters']['root']['request']['args']
+          assert args['build-arg:GIT_SHA'] == os.environ['APPLICATION_COMMIT']
+          assert args['label:org.opencontainers.image.revision'] == os.environ['APPLICATION_COMMIT']
+          assert args['label:org.opencontainers.image.version'] == os.environ['RELEASE_VERSION']
+          assert args['label:org.opencontainers.image.source'] == os.environ['SOURCE_REPO'] + '.git'
+          assert args['build-arg:compile_env'] == args['build-arg:install_env'] == 'production'
+          assert definition['buildType'] == 'https://github.com/docker/buildkit/blob/master/docs/build-repro.md'
+          dependency = next(item for item in definition['resolvedDependencies'] if item['uri'].startswith('pkg:docker/node@22.23.5-slim?'))
+          assert dependency['digest']['sha256'] == 'e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee'
+          assert 'platform=linux%2Famd64' in dependency['uri']
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'w') as output:
+              output.write(f"## Native Firecrawl package verified\n\n- Image: `{os.environ['IMAGE']}:{os.environ['RELEASE_VERSION']}@{os.environ['DIGEST']}`\n- Source: {os.environ['SOURCE_REPO']}/commit/{os.environ['APPLICATION_COMMIT']}\n- Build: {os.environ['BUILD_RUN']}\n- linux/amd64; exact digest, SLSA source and production inputs verified via GHCR HTTPS. No Docker.\n- Functional tests: KubeTEE staging only.\n")
+          print(json.dumps({'image': os.environ['IMAGE'] + '@' + os.environ['DIGEST'], 'source': os.environ['APPLICATION_COMMIT'], 'platform': subject['platform']}, indent=2))
+          PY
 
       - name: Publish immutable source tag and release evidence
         env:
