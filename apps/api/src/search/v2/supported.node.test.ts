@@ -135,6 +135,7 @@ test("requests have an actual timeout signal", async () => {
 test("missing and malformed keys fail before any outbound request", async () => {
   let calls = 0;
   globalThis.fetch = async () => { calls++; return jsonResponse({}); };
+  await assert.rejects(supported_search("q", options, undefined, health()), /attested storage/);
   await assert.rejects(supported_search("q", options, {}, health()), /configured/);
   await assert.rejects(supported_search("q", options, { tavily: 123 as unknown as string }, health()), /credential/);
   await assert.rejects(supported_search("q", options, { fake: "x" } as any, health()), /provider/);

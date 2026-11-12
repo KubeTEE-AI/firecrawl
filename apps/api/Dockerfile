@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:22.23.5-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS base
+FROM --platform=linux/amd64 node:22.23.5-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS base
 
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
@@ -8,7 +8,7 @@ ENV CI=true
 RUN corepack enable && corepack prepare pnpm@11.4.0 --activate
 
 # Build Go shared library
-FROM golang:1.26 AS go-build
+FROM --platform=linux/amd64 golang:1.26@sha256:6327cb290853a5d13091c436b88259b4f35ff70e49b1f8d9e5d1dd1757e9c6ba AS go-build
 WORKDIR /app
 COPY sharedLibs/go-html-to-md ./sharedLibs/go-html-to-md
 
@@ -42,6 +42,11 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     PATH=/usr/local/cargo/bin:$PATH
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path \
+    && ln -s ../rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/cargo /usr/local/cargo/bin/cargo \
+    && ln -s ../rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin/rustc /usr/local/cargo/bin/rustc \
+    && rustc --version && cargo --version \
+    && test "$(uname -m)" = x86_64 \
+    && test "$(rustup target list --installed)" = x86_64-unknown-linux-gnu \
     && chmod -R a+w $RUSTUP_HOME $CARGO_HOME
 
 # Copy dependency inputs. The native workspace is included here because its
@@ -68,6 +73,9 @@ RUN test -s dist/src/harness.js && \
 
 # Remove dev dependencies
 RUN pnpm prune --prod --ignore-scripts
+
+# Provider tests run against the same TypeScript compiler during CI, so they
+# need no extra image stage or dependency toolchain in the release artifact.
 
 # Runtime stage
 FROM base AS runtime

@@ -5,16 +5,12 @@ import { searxng_search } from "./searxng";
 import { ddgSearch } from "./ddgsearch";
 import { Logger } from "winston";
 import { UsOnlyUnavailableError } from "../../scraper/scrapeURL/error";
-import { readFileSync } from "node:fs";
-import { credentialAtPath, SupportedSearchError, supported_search } from "./supported";
+import { configuredSearchProviderCredentials } from "./attested-search-config";
+import { SupportedSearchError, supported_search } from "./supported";
 
 const supportedHealth = {};
-const supportedCredentials = config.SEARCH_SUPPORTED_PROVIDERS.length === 0 ? undefined : credentialAtPath(
-  config.SEARCH_SUPPORTED_PROVIDERS,
-  config.SEARCH_PROVIDER_KEYS_DIR,
-  // Resolve only the fixed path suffix. Never decorate or log a host path.
-  path => readFileSync(path, "utf8").replace(/\s+/g, ""),
-);
+export const supportedCredentials = configuredSearchProviderCredentials();
+
 export async function search({
   query,
   logger,
@@ -42,7 +38,7 @@ export async function search({
   advanced?: boolean;
   num_results?: number;
   tbs?: string;
-  filter?: string;
+  filter?: "past_hour" | "past_day" | "past_week" | "past_month" | "past_year";
   lang?: string;
   country?: string;
   location?: string;
@@ -80,7 +76,6 @@ export async function search({
         excludeDomains,
         usOnly,
       });
-
       return results;
     }
 
@@ -119,8 +114,6 @@ export async function search({
       timeout,
     });
     if (ddgResults.web && ddgResults.web.length > 0) return ddgResults;
-
-    // Fallback to empty response
     return {};
   } catch (error) {
     if (error instanceof SupportedSearchError) throw error;

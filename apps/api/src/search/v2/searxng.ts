@@ -46,6 +46,7 @@ export async function searxng_search(
         "Content-Type": "application/json",
       },
       params: params,
+      timeout: 15_000,
     });
 
     const data = response.data;

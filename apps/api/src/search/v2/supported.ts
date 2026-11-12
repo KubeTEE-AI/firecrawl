@@ -3,7 +3,7 @@ import type {
   SearchV2Response,
   WebSearchResult,
 } from "../../lib/entities";
-import { Logger } from "../../lib/logger";
+import { logger } from "../../lib/logger";
 
 export type SupportedProvider = "tavily" | "brave" | "exa" | "serper";
 type ProviderFileReader = (path: string) => string;
@@ -13,7 +13,7 @@ export function credentialAtPath(
   selected: SupportedProvider[],
   directory: string,
   readFile: ProviderFileReader,
-): SupportedCredentials {
+): Partial<SupportedCredentials> {
   if (directory !== "/secrets/providers") {
     throw new Error("Attested provider credential directory must be /secrets/providers.");
   }
@@ -26,7 +26,7 @@ export function credentialAtPath(
       // A path or read error must never be decorated with sensitive contents.
       throw new Error(`${name.toUpperCase()}_API_KEY is unavailable in attested in-guest storage.`);
     }
-  })) as SupportedCredentials;
+  })) as Partial<SupportedCredentials>;
 }
 
 export type ProviderHealth = Partial<
@@ -118,12 +118,13 @@ function rows(
 export async function supported_search(
   query: string,
   options: SupportedOptions,
-  credentials: Partial<SupportedCredentials>,
+  credentials: Partial<SupportedCredentials> | undefined,
   state: ProviderHealth = {},
   now: () => number = Date.now,
 ): Promise<SearchV2Response> {
   if (options.categories.length > 0) {    throw new Error("Supported search providers accept web search only.");
   }
+  if (!credentials) throw new Error("No supported search provider is initialized from attested storage.");
   const names = Object.keys(credentials);
   if (names.length === 0) {
     throw new Error("No supported search provider configured.");
@@ -213,8 +214,8 @@ export async function supported_search(
     } catch (error) {
       health.failures++;
       health.retryAt = now() + Math.min(300_000, 1000 * 2 ** Math.min(health.failures, 8));
-      Logger.warn(`Supported search provider failed: ${name}`);
-      if (health.failures >= healthMaxFailures) Logger.warn(`Supported search circuit opens: ${name}`);
+      logger.warn(`Supported search provider failed: ${name}`);
+      if (health.failures >= healthMaxFailures) logger.warn(`Supported search circuit opens: ${name}`);
       errors.push(error instanceof Error ? error.message : `${name} failed`);
     } finally {
       health.pending = false;
