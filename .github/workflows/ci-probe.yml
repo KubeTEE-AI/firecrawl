@@ -110,8 +110,8 @@ jobs:
           digest=$(jq -r '."containerimage.digest"' build-metadata.json)
           fi
           [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
-          docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{json .Provenance}}' | \
-            jq -e '."linux/amd64".SLSA.buildDefinition.resolvedDependencies[] | select(.uri == "git+https://github.com/KubeTEE-AI/firecrawl@'"${GITHUB_REF}"'" and .digest.gitCommit == "'"${GITHUB_SHA}"'")' >/dev/null
+          docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{json .Attestations}}' > provenance.json
+          jq -e '.SLSA.buildDefinition.resolvedDependencies[] | select(.uri == "git+https://github.com/KubeTEE-AI/firecrawl@'"${GITHUB_REF}"'" and .digest.gitCommit == "'"${GITHUB_SHA}"'")' provenance.json >/dev/null
           {
             echo "digest=${digest}"
             echo "image=${GHCR_IMAGE}:${RELEASE_VERSION}@${digest}"
