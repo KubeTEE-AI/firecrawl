@@ -66,7 +66,7 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 COPY . .
 
 # Build the application from a clean output directory.
-RUN rm -rf dist && pnpm run build
+RUN rm -rf dist && pnpm exec swc src --out-dir dist --strip-leading-paths
 ARG GIT_SHA=unknown
 RUN test -s dist/src/harness.js && \
     test -s dist/src/controllers/v0/crawl-status.js && \
@@ -75,8 +75,8 @@ RUN test -s dist/src/harness.js && \
 # Remove dev dependencies
 RUN pnpm prune --prod --ignore-scripts
 
-# Provider tests run against the same TypeScript compiler during CI, so they
-# need no extra image stage or dependency toolchain in the release artifact.
+# Build production JavaScript using the repository's SWC compiler. Runtime
+# Node tests stay outside the image, isolated from the production module graph.
 
 # Runtime stage
 FROM base AS runtime

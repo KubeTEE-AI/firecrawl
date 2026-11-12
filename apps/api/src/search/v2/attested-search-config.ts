@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { config } from "../config";
+import { config } from "../../config";
 import {
   credentialAtPath,
   type SupportedCredentials,
@@ -17,7 +17,7 @@ export function loadProviderCredentials(
 export function configuredSearchProviderCredentials():
   | Partial<SupportedCredentials>
   | undefined {
-  if (config.SEARCH_SUPPORTED_PROVIDERS.length === 0) return undefined;
+  if (!config.SEARCH_SUPPORTED_PROVIDERS?.length) return undefined;
   return loadProviderCredentials(
     config.SEARCH_SUPPORTED_PROVIDERS as SupportedProvider[],
     config.SEARCH_PROVIDER_KEYS_DIR,

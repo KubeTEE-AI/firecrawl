@@ -29,5 +29,11 @@
     "services/db/supabaseEmbeddings.ts",
     "utils/EventEmmitter.ts",
     "src/services/queue-service.ts"
+  ],
+  "exclude": [
+    "src/search/v2/*.node.test.ts",
+    "src/search/v2/.router-test.cjs",
+    "src/search/v2/.test-bootstrap.cjs",
+    "src/search/v2/.test.cjs"
   ]
 }
