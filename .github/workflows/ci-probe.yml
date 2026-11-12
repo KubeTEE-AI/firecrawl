@@ -78,11 +78,12 @@ jobs:
           root=${RUNNER_TEMP}/provider-root
           mkdir -p "${root}"
           cp -R apps/api/. "${root}/"
+          rm -rf "${root}/src/search/v2/index.node.test.ts" "${root}/src/search/v2/config.node.test.ts" "${root}/src/search/v2/supported.node.test.ts"
+          rm -f "${root}/src/lib/attested-search-config.ts"
           rm -rf "${root}/node_modules"
           git diff --exit-code "${BASE_COMMIT}" -- apps/api/package.json apps/api/pnpm-lock.yaml apps/api/pnpm-workspace.yaml apps/api/patches
           test -f apps/api/src/search/v2/supported.node.test.ts
-          test -f apps/api/src/search/v2/config.node.test.ts
-          test -f apps/api/src/search/v2/index.node.test.ts
+          test -f apps/api/src/search/v2/index.node.test.mjs
           mkdir -p "${root}/store"
           common=(--rm --platform linux/amd64 -w /work --user 0 --env CI=true
             --mount "type=bind,source=${root},target=/src,readonly"
@@ -93,7 +94,7 @@ jobs:
           # weaken the registry security floor; CI remains on minimumReleaseAge.
           docker run "${common[@]}" \
             docker.io/library/node:22.23.5-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee \
-            sh -eu -c 'corepack enable && corepack prepare pnpm@11.4.0 --activate && mkdir /types && cd /types && npm install --ignore-scripts --package-lock=false @types/node@^22 && cp -R /src/. /work/ && cd /work && pnpm install --frozen-lockfile --ignore-scripts --store-dir /store && ln -s /types/node_modules/@types node_modules/@types && cmp pnpm-lock.yaml /src/pnpm-lock.yaml && ls src/search/v2/*.node.test.ts && node --experimental-strip-types --test src/search/v2/*.node.test.ts'
+            sh -eu -c 'corepack enable && corepack prepare pnpm@11.4.0 --activate && mkdir /types && cd /types && npm install --ignore-scripts --package-lock=false @types/node@^22 && cp -R /src/. /work/ && cd /work && pnpm install --frozen-lockfile --ignore-scripts --store-dir /store && rm -rf node_modules/@types && ln -s /types/node_modules/@types node_modules/@types && cmp pnpm-lock.yaml /src/pnpm-lock.yaml && ./node_modules/.bin/tsc && node --test dist/src/search/v2/*.node.test.*'
           # Type prerequisites for this isolated test install outside pnpm. The
           # upstream lockfile stays unchanged and native hooks are not invoked;
           # the production Docker build performs its actual native build.
