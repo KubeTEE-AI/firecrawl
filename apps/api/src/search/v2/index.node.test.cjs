@@ -14,6 +14,7 @@ const config = {
 const calls = [];
 const dependencies = {
   "../../../config": { config },
+  "../../config": { config },
   "./fireEngine-v2": { fire_engine_search_v2: async () => ({}) },
   "./searxng.ts": { searxng_search: async () => ({ web: [{ url: "https://searxng.example" }] }) },
   "./ddgsearch": { ddgSearch: async () => ({ web: [] }) },
@@ -35,7 +36,7 @@ function loadRouter(providers) {
     // unrelated upstream runtime modules; no search behavior is mocked.
     return Object.hasOwn(dependencies, request) ? dependencies[request] : realLoad.call(this, request, ...rest);
   };
-  for (const path of ["./index.ts", "./supported.ts", "./attested-search-config.ts", "./config.ts"]) {
+  for (const path of ["./index.ts", "./supported.ts", "./attested-search-config.ts"]) {
     delete require.cache[require.resolve(path)];
   }
   config.SEARCH_SUPPORTED_PROVIDERS = providers;
