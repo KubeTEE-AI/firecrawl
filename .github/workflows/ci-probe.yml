@@ -92,7 +92,7 @@ jobs:
           # weaken the registry security floor; CI remains on minimumReleaseAge.
           docker run "${common[@]}" \
             docker.io/library/node:22.23.5-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee \
-            sh -eu -c 'corepack enable && corepack prepare pnpm@11.4.0 --activate && cp -R /src/. /work/ && cd /work && pnpm install --frozen-lockfile --store-dir /store && pnpm add --store-dir /store --save-optional @types/node@^22 && cmp pnpm-lock.yaml /src/pnpm-lock.yaml && ls apps/api/src/search/v2/*.node.test.ts && node --experimental-strip-types --test apps/api/src/search/v2/*.node.test.ts'
+            sh -eu -c 'apt-get update && apt-get install -y --no-install-recommends curl python3 build-essential ca-certificates && curl -fsSL -o /tmp/fdb-clients.deb https://github.com/apple/foundationdb/releases/download/7.3.63/foundationdb-clients_7.3.63-1_amd64.deb && dpkg -i /tmp/fdb-clients.deb && corepack enable && corepack prepare pnpm@11.4.0 --activate && cp -R /src/. /work/ && cd /work && pnpm install --frozen-lockfile --store-dir /store && pnpm add --store-dir /store --save-optional @types/node@^22 && cmp pnpm-lock.yaml /src/pnpm-lock.yaml && ls apps/api/src/search/v2/*.node.test.ts && node --experimental-strip-types --test apps/api/src/search/v2/*.node.test.ts'
           # The optional @types/node addition must leave the lockfile unchanged;
           # the in-container cmp above proves it before the actual tests run.
 
