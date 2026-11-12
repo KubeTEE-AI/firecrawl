@@ -8,6 +8,10 @@ on:
         description: Immutable KubeTEE release version
         required: true
         type: string
+      published_digest:
+        description: Exact existing GHCR sha256 digest to verify (skip branch-push builds)
+        required: false
+        type: string
   push:
     branches: [kubetee-release-2-11-731-1]
     paths:
@@ -56,6 +60,9 @@ jobs:
           if [[ "${GITHUB_EVENT_NAME}" = workflow_dispatch ]]; then
             test "${{ inputs.version }}" = "${RELEASE_VERSION}"
           fi
+          if [[ -n "${{ inputs.published_digest }}" ]]; then
+            test "${{ github.event_name }}" = workflow_dispatch
+          fi
           test "${BASE_TAG}" = v2.11.731
           git clone --no-checkout --filter=blob:none "${SOURCE_REPO}" src
           cd src
@@ -84,9 +91,15 @@ jobs:
       - name: Publish immutable image with native provenance
         run: |
           set -euo pipefail
+          if [[ -n "${{ inputs.published_digest }}" ]]; then
+            [[ "${{ inputs.published_digest }}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{json .Manifest}}' \
+              | jq -e --arg digest "${{ inputs.published_digest }}" '.digest == $digest' >/dev/null
+            digest="${{ inputs.published_digest }}"
+          else
           cd src
           echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          docker buildx build --progress=plain \
+          docker buildx build --progress=plain --metadata-file build-metadata.json \
             --platform linux/amd64 --provenance=mode=max --no-cache --pull --push \
             --label "org.opencontainers.image.source=${SOURCE_REPO}" \
             --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
@@ -94,7 +107,8 @@ jobs:
             --build-arg install_env=production --build-arg compile_env=production \
             --build-arg GIT_SHA="${GITHUB_SHA}" \
             --tag "${GHCR_IMAGE}:${RELEASE_VERSION}" -f apps/api/Dockerfile apps/api | tee build.log
-          digest=$(sed -n 's/.* name: '${GHCR_IMAGE}'.* digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p' build.log | tail -1)
+          digest=$(jq -r '."containerimage.digest"' build-metadata.json)
+          fi
           [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
           docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{json .Provenance}}' | \
             jq -e '."linux/amd64".SLSA.buildDefinition.resolvedDependencies[] | select(.uri == "git+https://github.com/KubeTEE-AI/firecrawl@'"${GITHUB_REF}"'" and .digest.gitCommit == "'"${GITHUB_SHA}"'")' >/dev/null
