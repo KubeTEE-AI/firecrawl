@@ -60,7 +60,10 @@ jobs:
           test "${#base_commit}" = 40
           git checkout --quiet --detach "${GITHUB_SHA}"
           test "$(git rev-parse HEAD)" = "$(git rev-parse "${GITHUB_SHA}^{commit}")"
-          test "$(git rev-parse "HEAD:${GITHUB_WORKFLOW_REF#*KubeTEE-AI/firecrawl/}")" = "$(git hash-object "../${GITHUB_WORKFLOW_REF#*KubeTEE-AI/firecrawl@}")"
+          workflow_path=${GITHUB_WORKFLOW_REF#*KubeTEE-AI/firecrawl/}
+          workflow_path=${workflow_path%%@*}
+          test "${workflow_path}" = .github/workflows/ci-probe.yml
+          test "$(git rev-parse "HEAD:${workflow_path}")" = "$(git hash-object "../${workflow_path}")"
           git merge-base --is-ancestor "${base_commit}" HEAD
           echo "Base: $(git log -1 --format='%H %s' "${base_commit}")"
           echo "Source: $(git log -1 --format='%H %s' HEAD)"
