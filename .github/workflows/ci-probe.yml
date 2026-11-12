@@ -187,7 +187,7 @@ jobs:
           set -euo pipefail
           # A manual verification reuses a published digest; the producer
           # publishes its source tag only after verifying the built package.
-          test "$(docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{json .Manifest}}' | jq -r .digest)" = "${{ steps.build.outputs.digest }}"
+          test "$(docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{json .Manifest}}' | jq -r .digest)" = "${{ steps.evidence.outputs.digest }}"
           if [[ -z "${{ inputs.published_digest }}" ]]; then
             gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f "ref=refs/tags/${RELEASE_VERSION}" -f "sha=${source_commit}"
           else
