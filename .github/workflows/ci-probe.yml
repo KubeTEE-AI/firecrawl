@@ -83,13 +83,18 @@ jobs:
           test -f apps/api/src/search/v2/config.node.test.ts
           test -f apps/api/src/search/v2/index.node.test.ts
           mkdir -p "${root}/store"
-          common=(--rm --platform linux/amd64 -w /work --user 0
-            --mount "type=bind,source=${root},target=/work,readonly"
+          common=(--rm --platform linux/amd64 -w /work --user 0 --env CI=true
+            --mount "type=bind,source=${root},target=/src,readonly"
+            --mount "type=bind,source=${root}/store,target=/store"
             --mount "type=bind,source=${RUNNER_TEMP}/provider-report,target=/out")
           mkdir -p "${RUNNER_TEMP}/provider-report"
-          docker run "${common[@]}" --mount "type=bind,source=${root}/store,target=/store" \
-            docker.io/library/node:22-alpine sh -eu -c 'corepack enable && corepack prepare pnpm@10.15.1 --activate && cd /work && pnpm install --frozen-lockfile --store-dir /store && pnpm add --store-dir /store --save-optional @types/node@^22 && cd /work && node --experimental-strip-types --test apps/api/src/search/v2/*.node.test.ts; status=$?; cp pnpm-lock.yaml /out/pnpm-lock.yaml; exit $status'
-          cmp apps/api/pnpm-lock.yaml "${RUNNER_TEMP}/provider-report/pnpm-lock.yaml"
+          # Match apps/api/Dockerfile exactly, including pnpm 11.4.0. Do not
+          # weaken the registry security floor; CI remains on minimumReleaseAge.
+          docker run "${common[@]}" \
+            docker.io/library/node:22.23.5-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee \
+            sh -eu -c 'corepack enable && corepack prepare pnpm@11.4.0 --activate && cp -R /src/. /work/ && cd /work && pnpm install --frozen-lockfile --store-dir /store && pnpm add --store-dir /store --save-optional @types/node@^22 && cmp pnpm-lock.yaml /src/pnpm-lock.yaml && ls apps/api/src/search/v2/*.node.test.ts && node --experimental-strip-types --test apps/api/src/search/v2/*.node.test.ts'
+          # The optional @types/node addition must leave the lockfile unchanged;
+          # the in-container cmp above proves it before the actual tests run.
 
       - name: Create native pinned BuildKit and pre-cache the Dockerfile frontend
         run: |
