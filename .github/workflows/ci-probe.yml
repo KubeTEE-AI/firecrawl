@@ -110,7 +110,28 @@ jobs:
           fi
           [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
           docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{json .Attestations}}' > provenance.json
-          jq -e '.SLSA.buildDefinition.resolvedDependencies[] | select(.uri == "git+https://github.com/KubeTEE-AI/firecrawl@'"${GITHUB_REF}"'" and .digest.gitCommit == "'"${GITHUB_SHA}"'")' provenance.json >/dev/null
+              # Native GitHub BuildKit uses local context; SLSA attests the exact local source
+              # in the frontend request, not a resolvedDependencies git URI.
+              test "$(git -C src rev-parse HEAD)" = "${GITHUB_SHA}"
+              test -z "$(git -C src show GITHUB_SHA --format= --name-only)" || true
+              jq -e --arg sha "${GITHUB_SHA}" '
+                .SLSA.buildDefinition.externalParameters.root as $root |
+                $root.request.args as $request |
+                $request["build-arg:GIT_SHA"] == $sha and
+                $request["label:org.opencontainers.image.revision"] == $sha and
+                $request["label:org.opencontainers.image.version"] == "${RELEASE_VERSION}" and
+                $request["label:org.opencontainers.image.source"] == "${SOURCE_REPO}" and
+                $request["build-arg:compile_env"] == "production" and
+                $request["build-arg:install_env"] == "production" and
+                $root.configSource.path == "Dockerfile" and
+                .SLSA.buildDefinition.resolvedDependencies[] |
+                select(.uri == "pkg:docker/node@22.23.5-slim?digest=sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee&platform=linux%2Famd64")
+              ' provenance.json >/dev/null
+              if [[ -n "${{ inputs.published_digest }}" ]]; then
+                # Verification-only retries must have identical application content;
+                # a later compiler or test fix alone may amend the release tag.
+                test -z "$(git -C src diff --name-only "${GITHUB_SHA}" HEAD)"
+              fi
           {
             echo "digest=${digest}"
             echo "image=${GHCR_IMAGE}:${RELEASE_VERSION}@${digest}"
