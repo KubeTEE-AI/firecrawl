@@ -87,6 +87,42 @@ test("repeated failures trip a circuit with a later half-open probe", async () =
   assert.equal((await supported_search("q", options, { tavily: "test-credential", serper: "test-credential" }, h, () => now)).web?.length, 1);
 });
 
+test("concurrent recovery cannot bypass the provider circuit", async () => {
+  const h: any = { tavily: { failures: 0, retryAt: 0 }, exa: { failures: 0, retryAt: 0 } };
+  let release!: () => void;
+  const wait = new Promise<void>(resolve => { release = resolve; });
+  let calls = 0;
+  globalThis.fetch = async (input) => {
+    calls++;
+    if (String(input).includes("tavily")) {
+      await wait;
+      return jsonResponse({ error: "limited" }, false, 429);
+    }
+    return jsonResponse({ results: [] });
+  };
+  const requests = Promise.allSettled(Array.from({ length: 4 }, () => supported_search("q", options, { tavily: "test-credential", exa: "test-credential" }, h)));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  release();
+  await requests;
+  assert.equal(calls, 2, "only one in-flight call per provider");
+});
+
+test("credential tentatives never carry provider error bodies", async () => {
+  globalThis.fetch = async () => jsonResponse({ secretURL: "https://untrusted/?token=secret" }, false, 401);
+  await assert.rejects(supported_search("q", options, { tavily: "test-credential" }, health()), error => {
+    assert.ok(!String(error).includes("secretURL"));
+    assert.match(String(error), /HTTP 401/);
+    return true;
+  });
+});
+
+test("an invalid provider cannot silently fall back to DuckDuckGo", async () => {
+  await assert.rejects(supported_search("q", options, { fake: "x" } as any, health()), error => {
+    assert.equal((error as any).status, 502);
+    return true;
+  });
+});
+
 test("requests have an actual timeout signal", async () => {
   globalThis.fetch = async (_input, init) => {
     assert.ok(init?.signal instanceof AbortSignal);

@@ -3,6 +3,7 @@ import type {
   SearchV2Response,
   WebSearchResult,
 } from "../../lib/entities";
+import { Logger } from "../../lib/logger";
 
 export type SupportedProvider = "tavily" | "brave" | "exa" | "serper";
 type ProviderFileReader = (path: string) => string;
@@ -29,7 +30,7 @@ export function credentialAtPath(
 }
 
 export type ProviderHealth = Partial<
-  Record<SupportedProvider, { failures: number; retryAt: number; latencyMs?: number }>
+  Record<SupportedProvider, { failures: number; retryAt: number; latencyMs?: number; pending?: boolean }>
 >;
 
 export type SupportedOptions = {
@@ -129,7 +130,7 @@ export async function supported_search(
   }
   names.forEach(name => {
     if (!["tavily", "brave", "exa", "serper"].includes(name)) {
-      throw new Error("Unknown configured supported search provider.");
+      throw new SupportedSearchError("configuration", "Unknown configured supported search provider.");
     }
   });
   const errors: string[] = [];
@@ -141,12 +142,12 @@ export async function supported_search(
       throw new Error(`${name} has no supported search credential.`);
     }
     const health = state[name] ??= { failures: 0, retryAt: 0, latencyMs: 0 };
-    if (health.failures >= healthMaxFailures) {
-      health.retryAt = Math.max(health.retryAt, 0);
-      if (now() < health.retryAt) continue;
-    } else if (health.retryAt > now()) {
+    if (health.pending || health.retryAt > now()) {
+      // Concurrent callers must not bypass a cooling provider or fire a herd
+      // of half-open recovery probes against an already rate-limited API.
       continue;
     }
+    health.pending = true;
     let url: string;
     let init: RequestInit;
     if (name === "brave") {
@@ -200,6 +201,8 @@ export async function supported_search(
     }
     const started = now();
     try {
+      // Construct only this provider's request inside the pending guard so a
+      // future adapter error cannot leave its circuit latched forever.
       const raw: any = await request(name, url, init, options.timeout);
       const items = name === "brave" ? raw?.web?.results : name === "serper" ? raw?.organic : raw?.results;
       if (!Array.isArray(items)) throw new SupportedSearchError(name, "malformed response");
@@ -210,9 +213,11 @@ export async function supported_search(
     } catch (error) {
       health.failures++;
       health.retryAt = now() + Math.min(300_000, 1000 * 2 ** Math.min(health.failures, 8));
-      console.warn(`Supported search provider failed: ${name}`);
-      if (health.failures >= healthMaxFailures) console.warn(`Supported search circuit opens: ${name}`);
+      Logger.warn(`Supported search provider failed: ${name}`);
+      if (health.failures >= healthMaxFailures) Logger.warn(`Supported search circuit opens: ${name}`);
       errors.push(error instanceof Error ? error.message : `${name} failed`);
+    } finally {
+      health.pending = false;
     }
   }
   throw new SupportedSearchError(

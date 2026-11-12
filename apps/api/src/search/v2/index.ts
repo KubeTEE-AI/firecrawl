@@ -12,7 +12,8 @@ const supportedHealth = {};
 const supportedCredentials = config.SEARCH_SUPPORTED_PROVIDERS.length === 0 ? undefined : credentialAtPath(
   config.SEARCH_SUPPORTED_PROVIDERS,
   config.SEARCH_PROVIDER_KEYS_DIR,
-  path => readFileSync(path, "utf8"),
+  // Resolve only the fixed path suffix. Never decorate or log a host path.
+  path => readFileSync(path, "utf8").replace(/\s+/g, ""),
 );
 export async function search({
   query,
