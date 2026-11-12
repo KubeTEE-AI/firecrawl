@@ -73,21 +73,22 @@ jobs:
         run: |
           set -euo pipefail
           cd src
-          for test in apps/api/src/search/v2/*.node.test.ts apps/api/src/config.node.test.ts; do
-            test -f "${test}"
-            lib="${RUNNER_TEMP}/provider-$(basename "${test}" .ts)-lib"
-            mkdir -p "${lib}"
-            args=(--rm --platform linux/amd64 -w /work
-              --mount "type=bind,source=${PWD}/${test},target=/work/${test##*/},readonly"
-              --mount "type=bind,source=${PWD}/apps/api/src/config.ts,target=/work/config.ts,readonly"
-              --mount "type=bind,source=${PWD}/apps/api/src/env.ts,target=/work/env.ts,readonly"
-              --mount "type=bind,source=${PWD}/apps/api/src/search/v2/supported.ts,target=/work/supported.ts,readonly"
-              --mount "type=bind,source=${PWD}/apps/api/src/search/v2/index.ts,target=/work/index.ts,readonly")
-            docker run "${args[@]}" --mount "type=bind,source=${lib},target=/work/node_modules" \
-              docker.io/library/node:22-alpine sh -eu -c 'npm install --prefix /work --no-save pnpm@10.15.1 dotenv@17.2.2 zod@4.1.8 typescript@5.9.2 tsx@4.20.6'
-            docker run "${args[@]}" --mount "type=bind,source=${lib},target=/work/node_modules,readonly" \
-              docker.io/library/node:22-alpine node --import tsx --test "/work/${test##*/}"
+          root=${RUNNER_TEMP}/provider-root
+          mkdir -p "${root}/apps/api/src/search/v2" "${root}/store"
+          cp package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc "${root}/"
+          cp apps/api/package.json "${root}/apps/api/"
+          for path in env.ts config.ts config.node.test.ts; do
+            cp "apps/api/src/${path}" "${root}/apps/api/src/"
           done
+          cp apps/api/src/search/v2/supported.ts apps/api/src/search/v2/index.ts apps/api/src/search/v2/*.node.test.ts apps/api/src/.npmrc "${root}/apps/api/src/search/v2/"
+          mv "${root}/apps/api/src/search/v2/.npmrc" "${root}/apps/api/"
+          common=(--rm --platform linux/amd64 -w /work --user 0
+            --mount "type=bind,source=${root},target=/work,readonly"
+            --mount "type=bind,source=${RUNNER_TEMP}/provider-report,target=/out")
+          mkdir -p "${RUNNER_TEMP}/provider-report"
+          docker run "${common[@]}" --mount "type=bind,source=${root}/store,target=/store" \
+            docker.io/library/node:22-alpine sh -eu -c 'corepack enable && corepack prepare pnpm@10.15.1 --activate && cd /work/apps/api && pnpm install --frozen-lockfile --lockfile-dir /work --store-dir /store && pnpm add --lockfile-dir /work --store-dir /store --save-optional @types/node@^22 && cd /work && node --experimental-strip-types --test apps/api/src/search/v2/*.node.test.ts apps/api/src/config.node.test.ts; status=$?; cp pnpm-lock.yaml /out/pnpm-lock.yaml; exit $status'
+          cmp pnpm-lock.yaml "${RUNNER_TEMP}/provider-report/pnpm-lock.yaml"
 
       - name: Create native pinned BuildKit and pre-cache the Dockerfile frontend
         run: |
