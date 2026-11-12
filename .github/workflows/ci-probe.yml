@@ -75,7 +75,7 @@ jobs:
           cd src
           for test in apps/api/src/search/v2/*.node.test.ts apps/api/src/config.node.test.ts; do
             test -f "${test}"
-            lib="/private/tmp/provider-$(basename "${test}" .ts)-lib"
+            lib="${RUNNER_TEMP}/provider-$(basename "${test}" .ts)-lib"
             mkdir -p "${lib}"
             args=(--rm --platform linux/amd64 -w /work
               --mount "type=bind,source=${PWD}/${test},target=/work/${test##*/},readonly"
