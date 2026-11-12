@@ -9,7 +9,11 @@ on:
         required: true
         type: string
       published_digest:
-        description: Exact existing GHCR sha256 digest to verify (skip branch-push builds)
+        description: Exact existing GHCR index digest to verify; no build
+        required: false
+        type: string
+      source_commit:
+        description: Original API source SHA in BuildKit provenance (required for verification)
         required: false
         type: string
   push:
@@ -46,7 +50,7 @@ jobs:
       attestations: write
     outputs:
       image: ${{ steps.build.outputs.image }}
-      digest: ${{ steps.build.outputs.digest }}
+      digest: ${{ steps.evidence.outputs.digest }}
     steps:
       - name: Verify exact approved source and immutable version
         id: build
@@ -55,8 +59,21 @@ jobs:
         run: |
           set -euo pipefail
           test "${GITHUB_REPOSITORY}" = "KubeTEE-AI/firecrawl"
-          test "${GITHUB_REF}" = "refs/heads/kubetee-provider-patch" || test "${GITHUB_REF}" = "refs/heads/kubetee-release-2-11-731-1"
-          test "$(git ls-remote "${SOURCE_REPO}" "refs/tags/${RELEASE_VERSION}^{}")" = ""
+          if [[ -n "${{ inputs.published_digest }}" ]]; then
+            test "${{ github.event_name }}" = workflow_dispatch
+            [[ "${{ inputs.published_digest }}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            # Verification can require the name of the exact built source;
+            # it never publishes, retags, or accepts an implicit branch tip.
+            source_commit="${{ inputs.source_commit }}"
+            test "${#source_commit}" = 40
+            test "${GITHUB_REF}" = "refs/heads/kubetee-release-2-11-731-1" || test "${GITHUB_REF}" = "refs/tags/${RELEASE_VERSION}"
+          else
+            test "${GITHUB_EVENT_NAME}" = push
+            test "${GITHUB_REF}" = "refs/heads/kubetee-provider-patch" || test "${GITHUB_REF}" = "refs/heads/kubetee-release-2-11-731-1"
+            source_commit="${GITHUB_SHA}"
+            test "${GITHUB_EVENT_REPOSITORY}" = "${GITHUB_REPOSITORY}"
+            test -z "$(git ls-remote "${SOURCE_REPO}" "refs/tags/${RELEASE_VERSION}" "refs/tags/${RELEASE_VERSION}^{}")"
+          fi
           if [[ "${GITHUB_EVENT_NAME}" = workflow_dispatch ]]; then
             test "${{ inputs.version }}" = "${RELEASE_VERSION}"
           fi
@@ -68,8 +85,11 @@ jobs:
           cd src
           base_commit=$(git ls-remote "${UPSTREAM_REPO}" "refs/tags/${BASE_TAG}^{}" | awk '{print $1}')
           test "${#base_commit}" = 40
+          # Verify this checkout supplies the workflow itself. Provenance can
+          # refer to an older API commit without reauthoring the package.
           git checkout --quiet --detach "${GITHUB_SHA}"
           test "$(git rev-parse HEAD)" = "$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          git merge-base --is-ancestor "${source_commit}" HEAD
           workflow_path=${GITHUB_WORKFLOW_REF#*KubeTEE-AI/firecrawl/}
           workflow_path=${workflow_path%%@*}
           test "${workflow_path}" = .github/workflows/ci-probe.yml
@@ -104,10 +124,10 @@ jobs:
           docker buildx build --progress=plain --metadata-file build-metadata.json \
             --platform linux/amd64 --provenance=mode=max --no-cache --pull --push \
             --label "org.opencontainers.image.source=${SOURCE_REPO}" \
-            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.revision=${source_commit}" \
             --label "org.opencontainers.image.version=${RELEASE_VERSION}" \
             --build-arg install_env=production --build-arg compile_env=production \
-            --build-arg GIT_SHA="${GITHUB_SHA}" \
+            --build-arg GIT_SHA="${source_commit}" \
             --tag "${GHCR_IMAGE}:${RELEASE_VERSION}" -f apps/api/Dockerfile apps/api | tee build.log
           digest=$(jq -r '."containerimage.digest"' build-metadata.json)
           fi
@@ -120,8 +140,8 @@ jobs:
             jq -e '[.manifests[] | select(.platform.architecture == "amd64")] | length == 1' >/dev/null
           docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{json .Provenance}}' | \
             jq -e '(.["linux/amd64"] // .).SLSA.buildDefinition as $b |
-              $b.externalParameters.request.root.request.args["vcs:revision"] == "'"${GITHUB_SHA}"'" and
-              $b.externalParameters.request.args["build-arg:GIT_SHA"] == "'"${GITHUB_SHA}"'" and
+              $b.externalParameters.request.root.request.args["vcs:revision"] == "'"${source_commit}"'" and
+              $b.externalParameters.request.args["build-arg:GIT_SHA"] == "'"${source_commit}"'" and
               $b.externalParameters.request.root.request.args["vcs:source"] == "'"${SOURCE_REPO}"'" and
               $b.buildType == "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md" and
               ($b.resolvedDependencies[] | select(.uri | startswith("pkg:docker/node@22.23.5-slim?digest=sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee&platform=linux%2Famd64")))' >/dev/null
@@ -131,7 +151,28 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
           {
             echo '## Firecrawl release'
-            echo "- Source: ${SOURCE_REPO}/commit/${GITHUB_SHA}"
+            echo "- Source: ${SOURCE_REPO}/commit/${source_commit}"
+            echo "- Image: ${GHCR_IMAGE}:${RELEASE_VERSION}@${digest}"
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Export verified immutable package
+        id: evidence
+        run: |
+          set -euo pipefail
+          # GHCR's manifest response carries the index digest. The producer
+          # writes it; a manual verification requires the input to match.
+          digest="$(docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{json .Manifest}}' | jq -r .digest)"
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          if [[ -n "${{ inputs.published_digest }}" ]]; then
+            test "${digest}" = "${{ inputs.published_digest }}"
+          fi
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+          echo "image=${GHCR_IMAGE}:${RELEASE_VERSION}@${digest}" >> "${GITHUB_OUTPUT}"
+          echo "Verified GHCR digest: ${digest}"
+          {
+            echo '## Verified Firecrawl package'
+            echo "- Source: ${SOURCE_REPO}/commit/${source_commit}"
             echo "- Image: ${GHCR_IMAGE}:${RELEASE_VERSION}@${digest}"
             echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } >> "${GITHUB_STEP_SUMMARY}"
@@ -144,8 +185,14 @@ jobs:
           # A manual verification reuses a published digest; the producer
           # publishes its source tag only after verifying the built package.
           test "$(docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{json .Manifest}}' | jq -r .digest)" = "${{ steps.build.outputs.digest }}"
-          gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f "ref=refs/tags/${RELEASE_VERSION}" -f "sha=${GITHUB_SHA}"
-          gh release create "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" \
+          if [[ -z "${{ inputs.published_digest }}" ]]; then
+            gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f "ref=refs/tags/${RELEASE_VERSION}" -f "sha=${source_commit}"
+          else
+            existing_tag="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_VERSION}" --jq .object.sha)"
+            test "${existing_tag}" = "${source_commit}"
+            echo "Source tag already resolves to the verified commit."
+          fi
+          gh release create "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --target "${source_commit}" \
             --title "Firecrawl ${RELEASE_VERSION} — attested provider search" \
             --generate-notes --notes 'Native GitHub Actions build, exact source and upstream v2.11.731. Immutable GHCR image digest and source provenance in the run summary. No provider credentials enter the image or runtime environment. Provider keys are released by Trustee KBS through CDH at /secrets/providers only inside an attested Firecrawl Kata TDX guest.'
 
