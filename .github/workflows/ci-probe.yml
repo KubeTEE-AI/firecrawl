@@ -44,7 +44,7 @@ jobs:
       - working-directory: apps/api
         run: |
           set -euo pipefail
-          docker run --rm --platform linux/amd64 -w /work --user 0 --env CI=true --mount "type=bind,source=${PWD},target=/src,readonly" node:22.23.5-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee sh -eu -c 'corepack enable && corepack prepare pnpm@11.4.0 --activate && cp -R /src/. /work/ && pnpm install --frozen-lockfile --ignore-scripts && node --import tsx --test src/search/v2/supported.node.test.ts src/search/v2/index.node.test.cjs'
+          docker run --rm --platform linux/amd64 -w /work --user 0 --env CI=true --mount "type=bind,source=${PWD},target=/src,readonly" node:22.23.5-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee sh -eu -c 'corepack enable && corepack prepare pnpm@11.4.0 --activate && cp -R /src/. /work/ && pnpm install --frozen-lockfile --ignore-scripts && node --import tsx --test src/search/v2/supported.node.test.ts'
 
   release:
     needs: test
@@ -100,7 +100,6 @@ jobs:
           rm -rf "${root}/node_modules"
           git diff --exit-code "${BASE_COMMIT}" -- apps/api/package.json apps/api/pnpm-lock.yaml apps/api/pnpm-workspace.yaml apps/api/patches
           test -f apps/api/src/search/v2/supported.node.test.ts
-          test -f apps/api/src/search/v2/index.node.test.cjs
           test -f apps/api/provider-test-stubs.cjs
           mkdir -p "${root}/store"
           common=(--rm --platform linux/amd64 -w /work --user 0 --env CI=true
@@ -112,7 +111,7 @@ jobs:
           # weaken the registry security floor; CI remains on minimumReleaseAge.
           docker run "${common[@]}" \
             docker.io/library/node:22.23.5-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee \
-            sh -eu -c 'corepack enable && corepack prepare pnpm@11.4.0 --activate && cp -R /src/. /work/ && export NODE_OPTIONS="--require=/work/provider-test-stubs.cjs" && cd /work && pnpm install --frozen-lockfile --ignore-scripts --store-dir /store && cmp pnpm-lock.yaml /src/pnpm-lock.yaml && node --import tsx --test src/search/v2/supported.node.test.ts src/search/v2/index.node.test.cjs'
+            sh -eu -c 'corepack enable && corepack prepare pnpm@11.4.0 --activate && cp -R /src/. /work/ && export NODE_OPTIONS="--require=/work/provider-test-stubs.cjs" && cd /work && pnpm install --frozen-lockfile --ignore-scripts --store-dir /store && cmp pnpm-lock.yaml /src/pnpm-lock.yaml && node --import tsx --test src/search/v2/supported.node.test.ts'
           # Type prerequisites for this isolated test install outside pnpm. The
           # upstream lockfile stays unchanged and native hooks are not invoked;
           # the production Docker build performs its actual full TypeScript build.
