@@ -85,18 +85,21 @@ jobs:
           cd src
           base_commit=$(git ls-remote "${UPSTREAM_REPO}" "refs/tags/${BASE_TAG}^{}" | awk '{print $1}')
           test "${#base_commit}" = 40
-          # Verify this checkout supplies the workflow itself. Provenance can
-          # refer to an older API commit without reauthoring the package.
-          git checkout --quiet --detach "${GITHUB_SHA}"
-          test "$(git rev-parse HEAD)" = "$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          # A verification run checks the exact source already attested to
+          # this package. It never moves, replaces, or builds another tag.
+          git checkout --quiet --detach "${source_commit}"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "${source_commit}^{commit}")"
           git merge-base --is-ancestor "${source_commit}" HEAD
           workflow_path=${GITHUB_WORKFLOW_REF#*KubeTEE-AI/firecrawl/}
           workflow_path=${workflow_path%%@*}
-          test "${workflow_path}" = .github/workflows/ci-probe.yml
-          test "$(git rev-parse "HEAD:${workflow_path}")" = "$(git hash-object "${workflow_path}")"
+          if [[ -z "${{ inputs.published_digest }}" ]]; then
+            test "${workflow_path}" = .github/workflows/ci-probe.yml
+            test "$(git rev-parse "HEAD:${workflow_path}")" = "$(git hash-object "${workflow_path}")"
+          fi
           git merge-base --is-ancestor "${base_commit}" HEAD
           echo "Base: $(git log -1 --format='%H %s' "${base_commit}")"
           echo "BASE_COMMIT=${base_commit}" >> "${GITHUB_ENV}"
+          echo "source_commit=${source_commit}" >> "${GITHUB_ENV}"
           echo "Source: $(git log -1 --format='%H %s' HEAD)"
           docker info
 
@@ -188,11 +191,11 @@ jobs:
           if [[ -z "${{ inputs.published_digest }}" ]]; then
             gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f "ref=refs/tags/${RELEASE_VERSION}" -f "sha=${source_commit}"
           else
-            existing_tag="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_VERSION}" --jq .object.sha)"
-            test "${existing_tag}" = "${source_commit}"
-            echo "Source tag already resolves to the verified commit."
+            tag_object=$(gh api "repos/${GITHUB_REPOSITORY}/git/tags" -f "tag=${RELEASE_VERSION}" -f "object=${source_commit}" -f "type=commit" -f "message=KubeTEE ${RELEASE_VERSION}, GHCR index ${{ steps.evidence.outputs.digest }}." --jq .sha)
+            gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f "ref=refs/tags/${RELEASE_VERSION}" -f "sha=${tag_object}"
+            test "$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tag_object}" --jq .object.sha)" = "${source_commit}"
           fi
-          gh release create "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --target "${source_commit}" \
+          gh release create "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --target "${source_commit}" --verify-tag \
             --title "Firecrawl ${RELEASE_VERSION} — attested provider search" \
             --generate-notes --notes 'Native GitHub Actions build, exact source and upstream v2.11.731. Immutable GHCR image digest and source provenance in the run summary. No provider credentials enter the image or runtime environment. Provider keys are released by Trustee KBS through CDH at /secrets/providers only inside an attested Firecrawl Kata TDX guest.'
 
