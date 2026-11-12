@@ -13,8 +13,7 @@ on:
     paths:
       - .github/workflows/ci-probe.yml
       - apps/api/src/search/v2/**
-      - apps/api/tsconfig.provider-test.json
-      - apps/api/provider-test-stubs.cjs
+      - apps/api/tsconfig.json
       - apps/api/Dockerfile
 
 # At most one builder named kubetee-provider; jobs are sequential.
