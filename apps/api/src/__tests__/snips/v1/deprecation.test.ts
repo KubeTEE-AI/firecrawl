@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import request from "supertest";
-import { itIf, TEST_API_URL } from "../lib";
+import { itIf, scrapeTimeout, TEST_API_URL } from "../lib";
 import { idmux, Identity, V1_LIVE } from "./lib";
 
 const itV1 = itIf(V1_LIVE);
@@ -101,7 +101,7 @@ describe("Deprecation warnings on legacy endpoints", () => {
       ).toBe(true);
       expect(res.body.replacement).toBe("/v2/scrape");
     },
-    60000,
+    scrapeTimeout,
   );
 
   itV1(
