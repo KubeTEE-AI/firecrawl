@@ -5,7 +5,15 @@ import { searxng_search } from "./searxng";
 import { ddgSearch } from "./ddgsearch";
 import { Logger } from "winston";
 import { UsOnlyUnavailableError } from "../../scraper/scrapeURL/error";
+import { readFileSync } from "node:fs";
+import { credentialAtPath, SupportedSearchError, supported_search } from "./supported";
 
+const supportedHealth = {};
+const supportedCredentials = config.SEARCH_SUPPORTED_PROVIDERS.length === 0 ? undefined : credentialAtPath(
+  config.SEARCH_SUPPORTED_PROVIDERS,
+  config.SEARCH_PROVIDER_KEYS_DIR,
+  path => readFileSync(path, "utf8"),
+);
 export async function search({
   query,
   logger,
@@ -75,6 +83,15 @@ export async function search({
       return results;
     }
 
+    const searchTypes = type === undefined ? ["web"] : Array.isArray(type) ? type : [type];
+    if (!usOnly && searchTypes.every(t => t === "web") && config.SEARCH_SUPPORTED_PROVIDERS.length > 0) {
+      logger.info("Using supported API search providers");
+      return await supported_search(query, {
+        num_results, categories: [], timeout, lang, country, safe, type,
+        includeDomains, excludeDomains,
+      }, supportedCredentials, supportedHealth);
+    }
+
     // includeDomains/excludeDomains are enforced on returned URLs only on
     // the fire engine path above; the fallback providers below receive them
     // solely as the site: chain baked into the query.
@@ -105,6 +122,7 @@ export async function search({
     // Fallback to empty response
     return {};
   } catch (error) {
+    if (error instanceof SupportedSearchError) throw error;
     logger.error(`Error in search function`, { error });
     return {};
   }

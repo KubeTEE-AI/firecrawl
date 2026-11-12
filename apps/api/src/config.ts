@@ -355,6 +355,14 @@ const configSchema = z.object({
   // request reaches the PDF engine and its content-cache refresh budget
   // instead of being answered with the indexed copy of the old parse.
   INDEX_SKIP_ON_PDF_REFRESH: z.stringbool().default(false),
+  SEARCH_SUPPORTED_PROVIDERS: z.preprocess(
+    value => typeof value === "string"
+      ? value.split(",").map(name => name.trim().toLowerCase()).filter(Boolean)
+      : [],
+    z.array(z.enum(["tavily", "brave", "exa", "serper"])),
+  ),
+  SEARCH_PROVIDER_KEYS_DIR: z.string().default(""),
+
   // On a URL index hit for a PDF whose entry recorded its fire-pdf content
   // key, ask the fire-pdf cache service whether it holds a newer parse; if it
   // does, the index copy is treated as a miss so the request is answered from
@@ -889,6 +897,9 @@ const configSchema = z.object({
 });
 
 const validatedConfigSchema = configSchema.superRefine((value, context) => {
+  if (value.SEARCH_SUPPORTED_PROVIDERS.length > 0 && value.SEARCH_PROVIDER_KEYS_DIR === "") {
+    context.addIssue({ code: "custom", path: ["SEARCH_PROVIDER_KEYS_DIR"], message: "Attested provider storage is required for configured providers" });
+  }
   for (const key of [
     "EXTRACTION_PROVIDER_ROLLOUT_PERCENT",
     "EXTRACTION_PROVIDER_REF_SCHEMA_ROLLOUT_PERCENT",
@@ -922,4 +933,8 @@ const validatedConfigSchema = configSchema.superRefine((value, context) => {
   }
 });
 
-export const config = validatedConfigSchema.parse(process.env);
+export const config = validatedConfigSchema.superRefine((value, context) => {
+  if (value.SEARCH_SUPPORTED_PROVIDERS.length > 0 && value.SEARCH_PROVIDER_KEYS_DIR !== "/secrets/providers") {
+    context.addIssue({ code: "custom", path: ["SEARCH_PROVIDER_KEYS_DIR"], message: "Provider storage must be the CDH/tmpfs path /secrets/providers" });
+  }
+}).parse(process.env);
