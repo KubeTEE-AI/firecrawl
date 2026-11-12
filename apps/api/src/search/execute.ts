@@ -187,6 +187,14 @@ function fuseRankings(
     .map(([, tool]) => tool);
 }
 
+// Time-window values are distinct from the free-form `tbs` provider modifier.
+function filterForProvider(
+  value: string | undefined,
+): "past_hour" | "past_day" | "past_week" | "past_month" | "past_year" | undefined {
+  return value === "past_hour" || value === "past_day" || value === "past_week" ||
+    value === "past_month" || value === "past_year" ? value : undefined;
+}
+
 export async function executeSearch(
   options: SearchOptions,
   context: SearchContext,
@@ -391,7 +399,7 @@ export async function executeSearch(
     indexCategorySearch !== null ||
     ((wantsTools || wantsSkills) && !searchTypes.length)
       ? null
-      : (search as (request: Parameters<typeof search>[0]) => ReturnType<typeof search>)({
+      : search({
           query: searchQuery,
           logger,
           requestId: context.requestId,
@@ -399,13 +407,13 @@ export async function executeSearch(
           num_results: operatorPlan.relaxed
             ? Math.max(num_results_buffer, Math.min(limit * 5, 100))
             : num_results_buffer,
-          tbs: options.tbs as "past_day" | "past_hour" | "past_month" | "past_week" | "past_year" | undefined,
-          filter: options.filter as string | undefined,
-          lang: options.lang as string,
-          country: options.country as string,
-          location: options.location as string | undefined,
-          safe: options.safe as "active" | "off" | undefined,
-          type: searchTypes as SearchResultType[],
+          tbs: options.tbs,
+          filter: filterForProvider(options.filter),
+          lang: options.lang,
+          country: options.country,
+          location: options.location,
+          safe: options.safe,
+          type: searchTypes,
           enterprise: options.enterprise,
           includeDomains: options.includeDomains?.length
             ? options.includeDomains
