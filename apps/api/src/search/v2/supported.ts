@@ -143,7 +143,13 @@ export async function supported_search(
   if (!pending) { pending = new Map(); inflight.set(state, pending); }
   const previous = pending.get(requestKey);
   if (previous) return previous;
-  const result = supported_search_uncached(query, options, credentials, state, now);
+  // The IIFE defers provider I/O until after its promise is registered, even
+  // when the implementation is synchronous before its first await. Every
+  // concurrent caller must share the actual result promise, not a wrapper.
+  const result = (async () => {
+    await Promise.resolve();
+    return supported_search_uncached(query, options, credentials, state, now);
+  })();
   pending.set(requestKey, result);
   try { return await result; }
   // Rejections can be observed before the microtask checkpoint and overall
@@ -195,7 +201,9 @@ async function supported_search_uncached(
         topic: "general",
         max_results: limit,
         include_domains: options.includeDomains ?? [],
-        include_domains_mode: options.includeDomains?.length ? "restrict" : "auto",
+        // Tavily accepts only restrict/prefer, and requires a non-empty domain
+        // list for either. With no include list, omit this optional parameter.
+        ...(options.includeDomains?.length ? { include_domains_mode: "restrict" } : {}),
         exclude_domains: options.excludeDomains ?? [],
         include_answer: false,
         include_raw_content: false,

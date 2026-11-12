@@ -1,105 +1,160 @@
 name: KubeTEE Firecrawl release
-run-name: Firecrawl v2.11.731-kubetee.1 — GitHub GHCR source verification
+run-name: KubeTEE Firecrawl ${{ inputs.version || github.ref_name }} — native GitHub build
 
-# Immutable package recovery only. Image was built natively on GitHub-hosted ubuntu
-# AMD64 by run 43300067734. All functional testing is exclusively on KubeTEE staging;
-# this job intentionally contains no Docker, Buildx, test harness or application test.
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Immutable KubeTEE release version
+        required: true
+        type: string
+      published_digest:
+        description: Exact existing GHCR sha256 digest to verify (skip branch-push builds)
+        required: false
+        type: string
   push:
     branches: [kubetee-release-2-11-731-1]
-    paths: [.github/workflows/ci-probe.yml]
+    paths:
+      - .github/workflows/ci-probe.yml
+      - apps/api/src/**
+      - apps/api/tsconfig.json
+      - apps/api/Dockerfile
 
-permissions:
-  contents: write
+# GitHub queued runs serialize immutable release creation; no runner is reused.
+concurrency:
+  group: firecrawl-kubetee-ghcr-release
+  cancel-in-progress: false
+
+permissions: {}
 
 env:
-  RELEASE_VERSION: v2.11.731-kubetee.1
-  DIGEST: sha256:9fb2c1b0dfeeb6b9fc37e3d650341629d377e5bf9baab269d0ab835df47d642f
-  IMAGE: ghcr.io/kubetee-ai/firecrawl
-  SOURCE_REPO: https://github.com/KubeTEE-AI/firecrawl
+  BASE_TAG: v2.11.731
+  RELEASE_VERSION: v2.11.731-kubetee.2
+  GHCR_IMAGE: ghcr.io/kubetee-ai/firecrawl
+  SOURCE_REPO: https://github.com/KubeTEE-AI/firecrawl.git
   UPSTREAM_REPO: https://github.com/firecrawl/firecrawl.git
-  APPLICATION_COMMIT: 841f0808d4c1e5c4812fc70e39470c24f9dac49b
-  BUILD_RUN: https://github.com/KubeTEE-AI/firecrawl/actions/runs/43300067734
+  BUILDX_VERSION: 0.38.2
+  BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
 
 jobs:
-  verify-native-package-and-release:
+
+  release:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+      attestations: write
+    outputs:
+      image: ${{ steps.build.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
-      - name: Verify GitHub source and identical application tree
+      - name: Verify exact approved source and immutable version
+        id: build
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "${GITHUB_REPOSITORY}" = 'KubeTEE-AI/firecrawl'
-          test "${GITHUB_REF}" = 'refs/heads/kubetee-release-2-11-731-1'
-          git clone --filter=blob:none --no-checkout "${SOURCE_REPO}.git" src
-          git -C src checkout --quiet --detach "${GITHUB_SHA}"
-          test "$(git -C src rev-parse 'HEAD:.github/workflows/ci-probe.yml')" = "$(git -C src hash-object '.github/workflows/ci-probe.yml')"
-          git -C src merge-base --is-ancestor "${APPLICATION_COMMIT}" "${GITHUB_SHA}"
-          test -z "$(git -C src diff --name-only "${GITHUB_SHA}" "${APPLICATION_COMMIT}" -- apps)"
-          base=$(git ls-remote "${UPSTREAM_REPO}" 'refs/tags/v2.11.731^{}' | awk '{print $1}')
-          test "${#base}" = 40
-          git -C src merge-base --is-ancestor "${base}" "${APPLICATION_COMMIT}"
+          test "${GITHUB_REPOSITORY}" = "KubeTEE-AI/firecrawl"
+          test "${GITHUB_REF}" = "refs/heads/kubetee-provider-patch" || test "${GITHUB_REF}" = "refs/heads/kubetee-release-2-11-731-1"
+          test "$(git ls-remote "${SOURCE_REPO}" "refs/tags/${RELEASE_VERSION}^{}")" = ""
+          if [[ "${GITHUB_EVENT_NAME}" = workflow_dispatch ]]; then
+            test "${{ inputs.version }}" = "${RELEASE_VERSION}"
+          fi
+          if [[ -n "${{ inputs.published_digest }}" ]]; then
+            test "${{ github.event_name }}" = workflow_dispatch
+          fi
+          test "${BASE_TAG}" = v2.11.731
+          git clone --no-checkout --filter=blob:none "${SOURCE_REPO}" src
+          cd src
+          base_commit=$(git ls-remote "${UPSTREAM_REPO}" "refs/tags/${BASE_TAG}^{}" | awk '{print $1}')
+          test "${#base_commit}" = 40
+          git checkout --quiet --detach "${GITHUB_SHA}"
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          workflow_path=${GITHUB_WORKFLOW_REF#*KubeTEE-AI/firecrawl/}
+          workflow_path=${workflow_path%%@*}
+          test "${workflow_path}" = .github/workflows/ci-probe.yml
+          test "$(git rev-parse "HEAD:${workflow_path}")" = "$(git hash-object "${workflow_path}")"
+          git merge-base --is-ancestor "${base_commit}" HEAD
+          echo "Base: $(git log -1 --format='%H %s' "${base_commit}")"
+          echo "BASE_COMMIT=${base_commit}" >> "${GITHUB_ENV}"
+          echo "Source: $(git log -1 --format='%H %s' HEAD)"
+          docker info
 
-      - name: Verify exact native GHCR manifest and complete SLSA source
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # No Docker test runner. Validate search only on the staging cluster.
+      - name: Create native pinned BuildKit
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver: docker-container
+          driver-opts: image=moby/buildkit:buildx-stable-1@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+          buildkitd-flags: --allow-insecure-entitlement security.insecure
+
+      - name: Publish immutable image with native provenance
         run: |
-          python3 - <<'PY'
-          import base64, gzip, json, os, urllib.request
+          set -euo pipefail
+          if [[ -n "${{ inputs.published_digest }}" ]]; then
+            [[ "${{ inputs.published_digest }}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{json .Manifest}}' \
+              | jq -e --arg digest "${{ inputs.published_digest }}" '.digest == $digest' >/dev/null
+            digest="${{ inputs.published_digest }}"
+          else
+          echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          test "$(git -C src status --porcelain)" = ''
+          test "$(git -C src rev-parse HEAD)" = "${GITHUB_SHA}"
+          cd src
+          docker buildx build --progress=plain --metadata-file build-metadata.json \
+            --platform linux/amd64 --provenance=mode=max --no-cache --pull --push \
+            --label "org.opencontainers.image.source=${SOURCE_REPO}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.version=${RELEASE_VERSION}" \
+            --build-arg install_env=production --build-arg compile_env=production \
+            --build-arg GIT_SHA="${GITHUB_SHA}" \
+            --tag "${GHCR_IMAGE}:${RELEASE_VERSION}" -f apps/api/Dockerfile apps/api | tee build.log
+          digest=$(jq -r '."containerimage.digest"' build-metadata.json)
+          fi
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          # GHCR/BuildKit stores local-context VCS details under
+          # externalParameters.request.root (the public SLSA v1 schema
+          # represents the same external-request structure, not a root key
+          # directly under externalParameters).
+          docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{json .Manifest}}' | \
+            jq -e '[.manifests[] | select(.platform.architecture == "amd64")] | length == 1' >/dev/null
+          docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{json .Provenance}}' | \
+            jq -e '(.["linux/amd64"] // .).SLSA.buildDefinition as $b |
+              $b.externalParameters.request.root.request.args["vcs:revision"] == "'"${GITHUB_SHA}"'" and
+              $b.externalParameters.request.args["build-arg:GIT_SHA"] == "'"${GITHUB_SHA}"'" and
+              $b.externalParameters.request.root.request.args["vcs:source"] == "'"${SOURCE_REPO}"'" and
+              $b.buildType == "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md" and
+              ($b.resolvedDependencies[] | select(.uri | startswith("pkg:docker/node@22.23.5-slim?digest=sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee&platform=linux%2Famd64")))' >/dev/null
+          {
+            echo "digest=${digest}"
+            echo "image=${GHCR_IMAGE}:${RELEASE_VERSION}@${digest}"
+          } >> "${GITHUB_OUTPUT}"
+          {
+            echo '## Firecrawl release'
+            echo "- Source: ${SOURCE_REPO}/commit/${GITHUB_SHA}"
+            echo "- Image: ${GHCR_IMAGE}:${RELEASE_VERSION}@${digest}"
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
-          auth = json.load(urllib.request.urlopen('https://ghcr.io/token?service=ghcr.io&scope=repository:kubetee-ai/firecrawl:pull'))
-          index_request = urllib.request.Request('https://ghcr.io/v2/kubetee-ai/firecrawl/manifests/' + os.environ['DIGEST'], headers={'Authorization': 'Bearer ' + auth['token'], 'Accept': 'application/vnd.oci.image.index.v1+json'})
-          index = json.load(urllib.request.urlopen(index_request))
-          attestation = next(item for item in index['manifests'] if item.get('annotations', {}).get('vnd.docker.reference.type') == 'attestation-manifest')
-          subject = index['manifests'][0]
-          assert subject['digest'] == attestation['annotations']['vnd.docker.reference.digest']
-          assert subject['platform'] == {'architecture': 'amd64', 'os': 'linux'}
-          assert sum(item['platform']['architecture'] == 'amd64' for item in index['manifests']) == 1
-
-          # Retrieve the OCI attestation manifest, then its DSSE JSON payload.
-          attestation_request = urllib.request.Request('https://ghcr.io/v2/kubetee-ai/firecrawl/manifests/' + attestation['digest'], headers={'Authorization': 'Bearer ' + auth["token"], 'Accept': 'application/vnd.oci.image.manifest.v1+json'})
-          envelope = json.load(urllib.request.urlopen(attestation_request))
-          request = urllib.request.Request(f"https://ghcr.io/v2/kubetee-ai/firecrawl/blobs/{envelope['layers'][0]['digest']}", headers={'Authorization': 'Bearer ' + auth["token"]})
-          payload = json.load(urllib.request.urlopen(request))
-          # GHCR serves the raw in-toto predicate from this OCI blob layer.
-          predicate = json.loads(base64.b64decode(payload['payload'])) if 'payload' in payload else payload
-          assert predicate['subject'][0]['digest']['sha256'] == subject['digest'][7:]
-          definition = predicate['predicate']['buildDefinition']
-          args = definition['externalParameters']['root']['request']['args']
-          assert args['build-arg:GIT_SHA'] == os.environ['APPLICATION_COMMIT']
-          assert args['label:org.opencontainers.image.revision'] == os.environ['APPLICATION_COMMIT']
-          assert args['label:org.opencontainers.image.version'] == os.environ['RELEASE_VERSION']
-          assert args['label:org.opencontainers.image.source'] == os.environ['SOURCE_REPO'] + '.git'
-          assert args['build-arg:compile_env'] == args['build-arg:install_env'] == 'production'
-          assert definition['buildType'] == 'https://github.com/docker/buildkit/blob/master/docs/build-repro.md'
-          dependency = next(item for item in definition['resolvedDependencies'] if item['uri'].startswith('pkg:docker/node@22.23.5-slim?'))
-          assert dependency['digest']['sha256'] == 'e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee'
-          assert 'platform=linux%2Famd64' in dependency['uri']
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'w') as output:
-              output.write(f"## Native Firecrawl package verified\n\n- Image: `{os.environ['IMAGE']}:{os.environ['RELEASE_VERSION']}@{os.environ['DIGEST']}`\n- Source: {os.environ['SOURCE_REPO']}/commit/{os.environ['APPLICATION_COMMIT']}\n- Build: {os.environ['BUILD_RUN']}\n- linux/amd64; exact digest, SLSA source and production inputs verified via GHCR HTTPS. No Docker.\n- Functional tests: KubeTEE staging only.\n")
-          print(json.dumps({'image': os.environ['IMAGE'] + '@' + os.environ['DIGEST'], 'source': os.environ['APPLICATION_COMMIT'], 'platform': subject['platform']}, indent=2))
-          PY
-
-      - name: Publish immutable source tag and release evidence
+      - name: Publish immutable source tag and GHCR digest evidence
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_VERSION}" --jq .object.sha)" = "${APPLICATION_COMMIT}" || {
-            test "$(git ls-remote "${SOURCE_REPO}.git" "refs/tags/${RELEASE_VERSION}")" = ""
-            gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f "ref=refs/tags/${RELEASE_VERSION}" -f "sha=${APPLICATION_COMMIT}"
-          }
-          gh release create "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --target "${APPLICATION_COMMIT}" \
-            --title 'Firecrawl v2.11.731-kubetee.1 — attested provider search' --verify-tag \
-            --notes "Native GitHub Actions AMD64 build ${BUILD_RUN}. Exact application source ${APPLICATION_COMMIT}; immutable image ${IMAGE}:${RELEASE_VERSION}@${DIGEST}. Provider routing includes dynamic inventory, circuit breaking, bounded retries and concurrent hedging. Provider API keys are Trustee KBS/CDH-only, never runtime environment. Functional tests exclusively on KubeTEE staging."
+          # A manual verification reuses a published digest; the producer
+          # publishes its source tag only after verifying the built package.
+          test "$(docker buildx imagetools inspect "${GHCR_IMAGE}:${RELEASE_VERSION}" --format '{{json .Manifest}}' | jq -r .digest)" = "${{ steps.build.outputs.digest }}"
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" -f "ref=refs/tags/${RELEASE_VERSION}" -f "sha=${GITHUB_SHA}"
+          gh release create "${RELEASE_VERSION}" --repo "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" \
+            --title "Firecrawl ${RELEASE_VERSION} — attested provider search" \
+            --generate-notes --notes 'Native GitHub Actions build, exact source and upstream v2.11.731. Immutable GHCR image digest and source provenance in the run summary. No provider credentials enter the image or runtime environment. Provider keys are released by Trustee KBS through CDH at /secrets/providers only inside an attested Firecrawl Kata TDX guest.'
 
-      - name: Confirm no borrowed source credentials
+      - name: Clean ephemeral builder and credentials
+        if: always()
         run: |
           set -euo pipefail
+          docker logout ghcr.io || true
           if test -f src/.git/config && grep -q 'http.*extraheader' src/.git/config; then
             echo 'Checkout contains credential configuration.' >&2
             exit 1
           fi
-          find . -maxdepth 1 -name 'provenance.json' -exec test ! -s {} \;

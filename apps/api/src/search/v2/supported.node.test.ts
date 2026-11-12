@@ -53,6 +53,19 @@ test("the first working configured provider preserves the exact question", async
   await supported_search("unchanged question?", options, { tavily: "test-credential" }, health());
   assert.equal(body.query, "unchanged question?");
   assert.deepEqual(body.include_domains, []);
+  assert.equal(body.include_domains_mode, undefined);
+});
+
+test("Tavily omits optional domain mode unless explicit domains are supplied", async () => {
+  let body: any;
+  globalThis.fetch = async (_url, init) => {
+    body = JSON.parse(String(init?.body));
+    return jsonResponse({ results: [] });
+  };
+  await supported_search("general", options, { tavily: "test-credential" }, health());
+  assert.equal(body.include_domains_mode, undefined);
+  await supported_search("restricted", { ...options, includeDomains: ["example.com"] }, { tavily: "test-credential" }, health());
+  assert.equal(body.include_domains_mode, "restrict");
 });
 
 test("empty results are returned without retries or errors", async () => {
