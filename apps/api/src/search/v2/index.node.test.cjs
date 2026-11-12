@@ -1,4 +1,4 @@
-const { test } = require("node:test");
+const { after, test } = require("node:test");
 const assert = require("node:assert/strict");
 const Module = require("node:module");
 
@@ -13,9 +13,9 @@ const config = {
 };
 const calls = [];
 const dependencies = {
-  "../../config": { config },
+  "../../../config": { config },
   "./fireEngine-v2": { fire_engine_search_v2: async () => ({}) },
-  "./searxng": { searxng_search: async () => ({ web: [{ url: "https://searxng.example" }] }) },
+  "./searxng.ts": { searxng_search: async () => ({ web: [{ url: "https://searxng.example" }] }) },
   "./ddgsearch": { ddgSearch: async () => ({ web: [] }) },
   "../../scraper/scrapeURL/error": { UsOnlyUnavailableError: class extends Error {} },
   "../../lib/logger": { logger: { warn() {}, info() {}, error() {} } },
@@ -24,7 +24,6 @@ let search;
 
 function loadRouter(providers) {
   config.SEARCH_SUPPORTED_PROVIDERS = providers;
-  files.clear();
   for (const provider of providers) files.set(`/secrets/providers/${provider.toUpperCase()}_API_KEY`, "synthetic-key\n");
   Module._load = function (request, ...rest) {
     if (request === "node:fs") return { ...realFS, readFileSync(path) {
@@ -36,9 +35,11 @@ function loadRouter(providers) {
     // unrelated upstream runtime modules; no search behavior is mocked.
     return Object.hasOwn(dependencies, request) ? dependencies[request] : realLoad.call(this, request, ...rest);
   };
-  for (const path of ["./index.ts", "./supported.ts", "./attested-search-config.ts"]) {
+  for (const path of ["./index.ts", "./supported.ts", "./attested-search-config.ts", "./config.ts"]) {
     delete require.cache[require.resolve(path)];
   }
+  config.SEARCH_SUPPORTED_PROVIDERS = providers;
+
   ({ search } = require("./index.ts"));
   Module._load = function (request, ...rest) {
     if (request === "node:fs") return realFS;
@@ -47,6 +48,7 @@ function loadRouter(providers) {
 }
 const logger = { info() {}, error() {} };
 const originalFetch = globalThis.fetch;
+after(() => { globalThis.fetch = originalFetch; Module._load = realLoad; });
 function response(body, ok = true, status = 200) {
   return { ok, status, json: async () => body };
 }
@@ -109,7 +111,7 @@ test("missing configured guest keys fail closed without outbound fetch", async (
   assert.equal(fetched, false);
 });
 
-test("final SearXNG source requests .json suffix and request timeout", async () => {
+test("SearXNG sends JSON parameters with a timeout and omitted unset engines/categories", async () => {
   const { searxng_search } = require("./searxng.ts");
   const axios = require("axios");
   const original = axios.get;
@@ -126,8 +128,8 @@ test("final SearXNG source requests .json suffix and request timeout", async () 
     const response = await searxng_search("q", { num_results: 5 });
     assert.equal(urls(response)[0], "https://json.example");
     // production searxng.ts emits these keys with empty-string values.
-    assert.equal(params.engines, "");
-    assert.equal(params.categories, "");
+    assert.equal(Object.hasOwn(params, "engines"), false);
+    assert.equal(Object.hasOwn(params, "categories"), false);
     assert.equal(params.format, "json");
   } finally {
     axios.get = original;

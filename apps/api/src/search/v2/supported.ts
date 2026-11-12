@@ -53,7 +53,7 @@ export class SupportedSearchError extends Error {
 }
 
 const healthMaxFailures = 5;
-const requestOptions = ["num_results", "type", "safe", "lang", "country", "includeDomains", "excludeDomains"] as const;
+const requestOptions = ["num_results", "type", "safe", "lang", "country", "includeDomains", "excludeDomains", "timeout"] as const;
 const inflight = new WeakMap<ProviderHealth, Map<string, Promise<SearchV2Response>>>();
 
 // Credentials are loaded only through credentialAtPath after CDH attestation.
@@ -127,8 +127,7 @@ export async function supported_search(
   if (options.categories.length > 0) {
     throw new Error("Supported search providers accept web search only.");
   }
-  const sanitizedOptions = Object.keys(options).filter(key => !requestOptions.includes(key as typeof requestOptions[number]));
-  if (sanitizedOptions.length > 0) throw new Error(`Unsupported search option: ${sanitizedOptions.join(",")}`);
+  // Provider names/order matter to failover; plaintext credentials never form the key.
   if (!credentials) throw new Error("No supported search provider is initialized from attested storage.");
   const names = Object.keys(credentials);
   if (names.length === 0) {
@@ -139,7 +138,7 @@ export async function supported_search(
       throw new SupportedSearchError("configuration", "Unknown configured supported search provider.");
     }
   });
-  const requestKey = JSON.stringify([query, requestOptions.map(key => [key, options[key]])]);
+  const requestKey = JSON.stringify([query, names, ...requestOptions.map(key => [key, options[key]])]);
   let pending = inflight.get(state);
   if (!pending) { pending = new Map(); inflight.set(state, pending); }
   const previous = pending.get(requestKey);

@@ -5,7 +5,7 @@ const Module = require("node:module");
 // attested file-reading modules are never stubbed. Production uses real imports.
 const originalLoad = Module._load;
 const stubs = {
-  "../../config": { config: { SEARXNG_ENDPOINT: "http://firecrawl-searxng:8080/search" } },
+  "../config": { config: { SEARXNG_ENDPOINT: "http://firecrawl-searxng:8080/search" } },
   "../../lib/entities": {},
   "../../scraper/scrapeURL/error": { UsOnlyUnavailableError: class extends Error {} },
   "./fireEngine-v2": { fire_engine_search_v2: async () => ({}) },

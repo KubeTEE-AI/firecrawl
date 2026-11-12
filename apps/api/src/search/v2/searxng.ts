@@ -33,8 +33,8 @@ export async function searxng_search(
       // gl: options.country, //not possible with SearXNG
       // location: options.location, //not possible with SearXNG
       // num: options.num_results, //not possible with SearXNG
-      engines: config.SEARXNG_ENGINES ?? "",
-      categories: config.SEARXNG_CATEGORIES ?? "",
+      ...(config.SEARXNG_ENGINES ? { engines: config.SEARXNG_ENGINES } : {}),
+      ...(config.SEARXNG_CATEGORIES ? { categories: config.SEARXNG_CATEGORIES } : {}),
       pageno: page,
       format: "json",
       // 2 = strict; omitted otherwise so the instance default applies
